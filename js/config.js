@@ -9,5 +9,6 @@
 // definidas en supabase/schema.sql, no por esta clave.
 // ============================================================================
 
-export const SUPABASE_URL = "https://TU-PROYECTO.supabase.co";
-export const SUPABASE_ANON_KEY = "TU-ANON-KEY-AQUI";
+export const SUPABASE_URL = "https://pyhxhdmdwlfywputcjqz.supabase.co";
+export const SUPABASE_ANON_KEY =
+  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InB5aHhoZG1kd2xmeXdwdXRjanF6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODcyNzE0OTcsImV4cCI6MjEwMjg0NzQ5N30.MIwpGl7MxXXrW-jI-YtRbBozU7Yo18zsRE7ZlgRHp9Y";
