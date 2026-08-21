@@ -58,12 +58,7 @@ a { color: inherit; }
   position: sticky; top: 0; z-index: 20;
 }
 .topbar-left { display: flex; align-items: center; gap: 10px; min-width: 0; flex: 1 1 auto; overflow: hidden; }
-.brand-badge {
-  width: 34px; height: 34px; border-radius: 8px; flex: none;
-  background: linear-gradient(135deg, var(--gray), var(--gray-light));
-  display: flex; align-items: center; justify-content: center;
-  font-family: 'Saira Condensed', sans-serif; font-weight: 900; font-size: 15px; color: #fff;
-}
+.brand-badge { width: 34px; height: 34px; object-fit: contain; flex: none; }
 .topbar-left > div { min-width: 0; }
 .topbar-title { font-family: 'Saira Condensed', sans-serif; font-weight: 800; font-size: 17px; text-transform: uppercase; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .topbar-sub { font-family: 'Saira', sans-serif; font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--text-faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -186,7 +181,7 @@ table.data tr:last-child td { border-bottom: none; }
 .login-wrap { min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 20px; }
 .login-card { width: 100%; max-width: 380px; }
 .login-logo { display: flex; flex-direction: column; align-items: center; gap: 10px; margin-bottom: 26px; }
-.login-logo .brand-badge { width: 52px; height: 52px; font-size: 22px; border-radius: 12px; }
+.login-logo .brand-badge { width: 64px; height: 64px; }
 .login-logo .title { font-family: 'Saira Condensed', sans-serif; font-weight: 900; font-size: 22px; text-transform: uppercase; color: var(--text); }
 .login-logo .sub { font-size: 12px; color: var(--text-faint); text-align: center; }
 .login-link { text-align: center; margin-top: 14px; font-size: 12.5px; color: var(--text-mute); }

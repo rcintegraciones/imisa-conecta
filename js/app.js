@@ -215,7 +215,7 @@ function renderShell(contentHtml, activeHash) {
     <div class="shell">
       <div class="topbar">
         <div class="topbar-left">
-          <div class="brand-badge">IC</div>
+          <img src="/assets/icono-grupo-imisa.png" alt="Grupo IMISA" class="brand-badge">
           <div>
             <div class="topbar-title">IMISA Conecta</div>
             <div class="topbar-sub">Grupo IMISA</div>
@@ -256,7 +256,7 @@ function renderLogin(errorMsg) {
     <div class="login-wrap">
       <div class="login-card">
         <div class="login-logo">
-          <div class="brand-badge">IC</div>
+          <img src="/assets/icono-grupo-imisa.png" alt="Grupo IMISA" class="brand-badge">
           <div class="title">IMISA Conecta</div>
           <div class="sub">Plataforma interna de RRHH — Grupo IMISA</div>
         </div>
@@ -328,7 +328,7 @@ function renderSetPassword() {
     <div class="login-wrap">
       <div class="login-card">
         <div class="login-logo">
-          <div class="brand-badge">IC</div>
+          <img src="/assets/icono-grupo-imisa.png" alt="Grupo IMISA" class="brand-badge">
           <div class="title">IMISA Conecta</div>
           <div class="sub">Plataforma interna de RRHH — Grupo IMISA</div>
         </div>
