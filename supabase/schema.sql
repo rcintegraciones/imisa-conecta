@@ -91,17 +91,21 @@ $$;
 -- ----------------------------------------------------------------------------
 create table if not exists public.compensacion (
   colaborador_id uuid primary key references public.profiles(id) on delete cascade,
-  salario_mensual numeric(12,2) not null default 0,
-  bono_anual numeric(12,2) not null default 0,
+  salario_mensual numeric(12,2) not null default 0, -- "Salario Base": divisor de la hora extra
+  bonificacion_mensual numeric(12,2) not null default 0, -- bonificación mensual recurrente (varía por persona)
+  bono_anual numeric(12,2) not null default 0, -- bono anual adicional, si aplica
   moneda text not null default 'GTQ',
   updated_at timestamptz not null default now(),
   updated_by uuid references public.profiles(id)
 );
 
+alter table public.compensacion add column if not exists bonificacion_mensual numeric(12,2) not null default 0;
+
 create table if not exists public.historial_compensacion (
   id uuid primary key default gen_random_uuid(),
   colaborador_id uuid not null references public.profiles(id) on delete cascade,
   salario_mensual numeric(12,2) not null,
+  bonificacion_mensual numeric(12,2) not null default 0,
   bono_anual numeric(12,2) not null,
   moneda text not null,
   vigente_hasta timestamptz not null default now(),
@@ -109,14 +113,16 @@ create table if not exists public.historial_compensacion (
   created_at timestamptz not null default now()
 );
 
+alter table public.historial_compensacion add column if not exists bonificacion_mensual numeric(12,2) not null default 0;
+
 -- Antes de actualizar una compensación, guarda el valor anterior en el historial.
 create or replace function public.log_compensacion_anterior()
 returns trigger
 language plpgsql
 as $$
 begin
-  insert into public.historial_compensacion (colaborador_id, salario_mensual, bono_anual, moneda, vigente_hasta, registrado_por)
-  values (old.colaborador_id, old.salario_mensual, old.bono_anual, old.moneda, now(), new.updated_by);
+  insert into public.historial_compensacion (colaborador_id, salario_mensual, bonificacion_mensual, bono_anual, moneda, vigente_hasta, registrado_por)
+  values (old.colaborador_id, old.salario_mensual, old.bonificacion_mensual, old.bono_anual, old.moneda, now(), new.updated_by);
   return new;
 end;
 $$;

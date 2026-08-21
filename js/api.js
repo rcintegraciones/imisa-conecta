@@ -85,11 +85,19 @@ export async function getCompensacion(colaboradorId) {
   return data;
 }
 
-export async function setCompensacion(colaboradorId, { salario_mensual, bono_anual, moneda }, userId) {
+export async function setCompensacion(colaboradorId, { salario_mensual, bonificacion_mensual, bono_anual, moneda }, userId) {
   const { data, error } = await supabase
     .from("compensacion")
     .upsert(
-      { colaborador_id: colaboradorId, salario_mensual, bono_anual, moneda, updated_at: new Date().toISOString(), updated_by: userId },
+      {
+        colaborador_id: colaboradorId,
+        salario_mensual,
+        bonificacion_mensual: bonificacion_mensual || 0,
+        bono_anual,
+        moneda,
+        updated_at: new Date().toISOString(),
+        updated_by: userId,
+      },
       { onConflict: "colaborador_id" }
     )
     .select()

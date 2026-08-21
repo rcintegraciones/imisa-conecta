@@ -531,11 +531,12 @@ async function renderInicio() {
   const root = renderShell(`<div class="empty-state">Cargando…</div>`, "#/inicio");
   try {
     const comp = await api.getCompensacion(profile.id);
-    const anual = comp ? Number(comp.salario_mensual) * 12 + Number(comp.bono_anual) : 0;
+    const mensual = comp ? Number(comp.salario_mensual) + Number(comp.bonificacion_mensual || 0) : 0;
+    const anual = mensual * 12 + Number(comp?.bono_anual || 0);
     root.innerHTML = `
       <div class="stat-grid">
         <div class="stat-tile"><div class="stat-value">${tiempoEnEmpresa(profile.fecha_ingreso)}</div><div class="stat-label">Tiempo en la empresa</div></div>
-        <div class="stat-tile"><div class="stat-value">${fmtMoney(comp?.salario_mensual, comp?.moneda)}</div><div class="stat-label">Salario mensual</div></div>
+        <div class="stat-tile"><div class="stat-value">${fmtMoney(mensual, comp?.moneda)}</div><div class="stat-label">Salario mensual</div></div>
         <div class="stat-tile"><div class="stat-value">${fmtMoney(anual, comp?.moneda)}</div><div class="stat-label">Compensación anual</div></div>
       </div>
       <div class="card">
@@ -565,7 +566,7 @@ function drawPlanillaTable(root, colaboradores, compById, empresaFiltro) {
   const rows = filtrados
     .map((p) => {
       const c = compById[p.id];
-      const mensual = Number(c?.salario_mensual || 0);
+      const mensual = Number(c?.salario_mensual || 0) + Number(c?.bonificacion_mensual || 0);
       const anual = mensual * 12 + Number(c?.bono_anual || 0);
       if (p.activo) {
         totalMensual += mensual;
@@ -681,9 +682,12 @@ async function drawDesgloseMensual(colaboradores, periodo) {
   const rows = activos
     .map((p) => {
       const plan = planById[p.id];
-      const salarioBase = Number(compById[p.id]?.salario_mensual || 0);
+      const comp = compById[p.id];
+      const salarioBase = Number(comp?.salario_mensual || 0);
       const incentivo = Number(plan?.incentivo || 0);
-      const bonificacion = Number(plan?.bonificacion || 0);
+      // Si RRHH no ha tocado este mes todavía, usa la bonificación mensual
+      // "estándar" del colaborador como valor por defecto.
+      const bonificacion = plan ? Number(plan.bonificacion || 0) : Number(comp?.bonificacion_mensual || 0);
       const comisiones = p.aplica_comisiones ? Number(plan?.comisiones || 0) : 0;
       const horasExtraMonto = Number(cierreById[p.id]?.monto || 0);
       const total = salarioBase + incentivo + bonificacion + comisiones + horasExtraMonto;
@@ -772,9 +776,10 @@ function openEditColaborador(p, comp, todosColaboradores) {
         <input type="checkbox" name="aplica_comisiones" ${p.aplica_comisiones ? "checked" : ""}> Aplica comisiones (ej. ventas)
       </label>
       <div class="row-2">
-        <div class="field"><label>Salario mensual</label><input class="input" type="number" step="0.01" min="0" name="salario_mensual" value="${comp?.salario_mensual || 0}"></div>
-        <div class="field"><label>Bono anual</label><input class="input" type="number" step="0.01" min="0" name="bono_anual" value="${comp?.bono_anual || 0}"></div>
+        <div class="field"><label>Salario base (mensual)</label><input class="input" type="number" step="0.01" min="0" name="salario_mensual" value="${comp?.salario_mensual || 0}"></div>
+        <div class="field"><label>Bonificación mensual</label><input class="input" type="number" step="0.01" min="0" name="bonificacion_mensual" value="${comp?.bonificacion_mensual || 0}"></div>
       </div>
+      <div class="field"><label>Bono anual (adicional, si aplica)</label><input class="input" type="number" step="0.01" min="0" name="bono_anual" value="${comp?.bono_anual || 0}"></div>
       <div class="row-2">
         <div class="field"><label>Fecha de egreso</label><input class="input" type="date" name="fecha_egreso" value="${p.fecha_egreso || ""}"></div>
         <div class="field"><label>Estado</label>
@@ -808,7 +813,12 @@ function openEditColaborador(p, comp, todosColaboradores) {
       });
       await api.setCompensacion(
         p.id,
-        { salario_mensual: Number(f.get("salario_mensual") || 0), bono_anual: Number(f.get("bono_anual") || 0), moneda: comp?.moneda || "GTQ" },
+        {
+          salario_mensual: Number(f.get("salario_mensual") || 0),
+          bonificacion_mensual: Number(f.get("bonificacion_mensual") || 0),
+          bono_anual: Number(f.get("bono_anual") || 0),
+          moneda: comp?.moneda || "GTQ",
+        },
         profile.id
       );
       modal.remove();
@@ -1740,8 +1750,6 @@ async function renderRolesView() {
 // siguiendo los machotes reales de Accesorios Ilimitados.
 // ============================================================================
 
-const BONIFICACION_INCENTIVO_LEY = 250; // Decreto 37-2001, Ley de Bonificación Incentivo
-
 const LETTERHEAD_POR_EMPRESA = {
   "accesorios ilimitados": {
     logo: "/assets/logo-accesorios-ilimitados.jpg",
@@ -1796,10 +1804,10 @@ function cartaLaboralHtml(colaborador) {
   `;
 }
 
-function cartaIngresosHtml(colaborador, salarioMensual) {
+function cartaIngresosHtml(colaborador, salarioBase, bonificacion) {
   const letterhead = getLetterhead(colaborador.empresa);
   const { header, footer } = cartaHeaderFooterHtml(letterhead, colaborador.empresa);
-  const base = Math.max(0, salarioMensual - BONIFICACION_INCENTIVO_LEY);
+  const total = salarioBase + bonificacion;
 
   return `
     <div class="print-area" style="max-width:700px;margin:0 auto;padding:40px;font-family:Georgia,serif;color:#111;background:#fff;font-size:14px">
@@ -1810,12 +1818,12 @@ function cartaIngresosHtml(colaborador, salarioMensual) {
         Documento Personal de Identificación -DPI- <strong>${escapeHtml(colaborador.dpi || "____________________")}</strong>,
         labora en esta empresa desempeñando el puesto de <strong>${escapeHtml(colaborador.puesto || "—")}</strong>, desde el
         ${fechaCortaEs(colaborador.fecha_ingreso)} a la fecha, devengando un salario mensual de
-        <strong>${montoATextoEs(salarioMensual)} (${fmtMoney(salarioMensual)})</strong> distribuidos de la siguiente manera:
+        <strong>${montoATextoEs(total)} (${fmtMoney(total)})</strong> distribuidos de la siguiente manera:
       </p>
       <table style="width:100%;border-collapse:collapse;margin:18px 0">
-        <tr><td style="padding:4px 0">Salario Base</td><td style="padding:4px 0;text-align:right">${fmtMoney(base)}</td></tr>
-        <tr><td style="padding:4px 0">Bonificación Decreto 37/2001</td><td style="padding:4px 0;text-align:right">${fmtMoney(BONIFICACION_INCENTIVO_LEY)}</td></tr>
-        <tr style="border-top:1px solid #333;font-weight:700"><td style="padding:6px 0">Total Salario Mensual</td><td style="padding:6px 0;text-align:right">${fmtMoney(salarioMensual)}</td></tr>
+        <tr><td style="padding:4px 0">Salario Base</td><td style="padding:4px 0;text-align:right">${fmtMoney(salarioBase)}</td></tr>
+        <tr><td style="padding:4px 0">Bonificación</td><td style="padding:4px 0;text-align:right">${fmtMoney(bonificacion)}</td></tr>
+        <tr style="border-top:1px solid #333;font-weight:700"><td style="padding:6px 0">Total Salario Mensual</td><td style="padding:6px 0;text-align:right">${fmtMoney(total)}</td></tr>
       </table>
       <p style="line-height:1.9;text-align:justify">
         Para los usos que al interesado convengan se extiende y firma la presente en la ciudad de Guatemala,
@@ -1869,18 +1877,20 @@ async function renderCartas() {
 
     let html;
     if (tipo === "ingresos") {
-      let salarioMensual = 0;
+      let salarioBase = 0;
+      let bonificacion = 0;
       try {
         const comp = await api.getCompensacion(colaborador.id);
-        salarioMensual = Number(comp?.salario_mensual || 0);
+        salarioBase = Number(comp?.salario_mensual || 0);
+        bonificacion = Number(comp?.bonificacion_mensual || 0);
       } catch (err) {
         console.error(err);
       }
-      if (!salarioMensual) {
+      if (!salarioBase && !bonificacion) {
         win.close();
-        return toast("Este colaborador no tiene salario mensual registrado en Planilla.", true);
+        return toast("Este colaborador no tiene salario registrado en Planilla.", true);
       }
-      html = cartaIngresosHtml(colaborador, salarioMensual);
+      html = cartaIngresosHtml(colaborador, salarioBase, bonificacion);
     } else {
       html = cartaLaboralHtml(colaborador);
     }
