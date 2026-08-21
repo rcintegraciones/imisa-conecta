@@ -162,6 +162,82 @@ function getFeriadosGuatemala(year) {
   ];
 }
 
+// ---------------------------------------------------------------------------
+// Números y fechas en letras (español) — para constancias laborales/ingresos
+// ---------------------------------------------------------------------------
+
+const UNIDADES = ["", "uno", "dos", "tres", "cuatro", "cinco", "seis", "siete", "ocho", "nueve"];
+const DIECIS = ["diez", "once", "doce", "trece", "catorce", "quince", "dieciséis", "diecisiete", "dieciocho", "diecinueve"];
+const DECENAS = ["", "", "veinte", "treinta", "cuarenta", "cincuenta", "sesenta", "setenta", "ochenta", "noventa"];
+const VEINTIS = ["veinte", "veintiuno", "veintidós", "veintitrés", "veinticuatro", "veinticinco", "veintiséis", "veintisiete", "veintiocho", "veintinueve"];
+const CENTENAS = ["", "ciento", "doscientos", "trescientos", "cuatrocientos", "quinientos", "seiscientos", "setecientos", "ochocientos", "novecientos"];
+
+function numeroATextoEs(n) {
+  n = Math.floor(n);
+  if (n === 0) return "cero";
+  if (n === 100) return "cien";
+
+  function menorMil(num) {
+    let out = "";
+    const c = Math.floor(num / 100);
+    const resto = num % 100;
+    if (c) out += (c === 1 && resto > 0 ? "ciento" : CENTENAS[c]) + " ";
+    if (resto >= 10 && resto < 20) out += DIECIS[resto - 10];
+    else if (resto >= 20 && resto < 30) out += VEINTIS[resto - 20];
+    else if (resto >= 30) {
+      const d = Math.floor(resto / 10);
+      const u = resto % 10;
+      out += DECENAS[d] + (u ? " y " + UNIDADES[u] : "");
+    } else if (resto > 0) {
+      out += UNIDADES[resto];
+    }
+    return out.trim();
+  }
+
+  if (n < 1000) return menorMil(n);
+
+  if (n < 1000000) {
+    const miles = Math.floor(n / 1000);
+    const resto = n % 1000;
+    const milesTexto = miles === 1 ? "mil" : `${menorMil(miles)} mil`;
+    return resto ? `${milesTexto} ${menorMil(resto)}` : milesTexto;
+  }
+
+  const millones = Math.floor(n / 1000000);
+  const resto = n % 1000000;
+  const millonesTexto = millones === 1 ? "un millón" : `${numeroATextoEs(millones)} millones`;
+  return resto ? `${millonesTexto} ${numeroATextoEs(resto)}` : millonesTexto;
+}
+
+// "Cuatro Mil Trescientos Quetzales Exactos" / "...con 50/100"
+function montoATextoEs(monto) {
+  const entero = Math.floor(monto);
+  const centavos = Math.round((monto - entero) * 100);
+  const texto = numeroATextoEs(entero).replace(/\b\w/g, (c) => c.toUpperCase());
+  return centavos > 0 ? `${texto} Quetzales con ${String(centavos).padStart(2, "0")}/100` : `${texto} Quetzales Exactos`;
+}
+
+const MESES_ES = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre"];
+
+// "treinta y un días del mes de julio del dos mil veintiséis"
+function fechaATextoEs(fechaISO) {
+  const [y, m, d] = fechaISO.split("-").map(Number);
+  let dia;
+  if (d === 1) dia = "primer día";
+  else {
+    // apócope de "uno" ante sustantivo: veintiuno -> veintiún, treinta y uno -> treinta y un
+    let texto = numeroATextoEs(d).replace(/veintiuno$/, "veintiún").replace(/uno$/, "un");
+    dia = `${texto} días`;
+  }
+  return `${dia} del mes de ${MESES_ES[m - 1]} del año ${numeroATextoEs(y)}`;
+}
+
+// "01 de septiembre del 2020" (formato corto usado dentro del cuerpo de las constancias)
+function fechaCortaEs(fechaISO) {
+  const [y, m, d] = fechaISO.split("-").map(Number);
+  return `${String(d).padStart(2, "0")} de ${MESES_ES[m - 1]} del ${y}`;
+}
+
 function openModal(title, bodyHtml) {
   const wrap = document.createElement("div");
   wrap.className = "modal-backdrop";
@@ -687,6 +763,7 @@ function openEditColaborador(p, comp, todosColaboradores) {
         <div class="field"><label>Fecha de ingreso</label><input class="input" type="date" name="fecha_ingreso" value="${p.fecha_ingreso || ""}"></div>
         <div class="field"><label>Fecha de nacimiento</label><input class="input" type="date" name="fecha_nacimiento" value="${p.fecha_nacimiento || ""}"></div>
       </div>
+      <div class="field"><label>DPI</label><input class="input" name="dpi" value="${escapeHtml(p.dpi || "")}" placeholder="0000 00000 0000"></div>
       <div class="row-2">
         <div class="field"><label>Hora de entrada</label><input class="input" type="time" name="hora_entrada" value="${p.hora_entrada || ""}"></div>
         <div class="field"><label>Hora de salida</label><input class="input" type="time" name="hora_salida" value="${p.hora_salida || ""}"></div>
@@ -720,6 +797,7 @@ function openEditColaborador(p, comp, todosColaboradores) {
         puesto: f.get("puesto") || null,
         area: f.get("area") || null,
         jefe_id: f.get("jefe_id") || null,
+        dpi: f.get("dpi") || null,
         fecha_ingreso: f.get("fecha_ingreso") || null,
         fecha_nacimiento: f.get("fecha_nacimiento") || null,
         fecha_egreso: f.get("fecha_egreso") || null,
@@ -1658,24 +1736,94 @@ async function renderRolesView() {
 }
 
 // ============================================================================
-// Vista: Cartas (RRHH) — genera una carta imprimible / descargable
+// Vista: Cartas (RRHH) — constancia laboral / constancia de ingresos,
+// siguiendo los machotes reales de Accesorios Ilimitados.
 // ============================================================================
 
-function cartaHtml({ tipo, colaborador, destinatario, motivo, salarioTexto }) {
-  const fecha = fmtDate(todayISO());
-  const cuerpo =
-    tipo === "ingreso"
-      ? `Por este medio se hace constar que <strong>${escapeHtml(colaborador.full_name)}</strong> labora en Grupo IMISA desde el <strong>${fmtDate(colaborador.fecha_ingreso)}</strong>, desempeñando el puesto de <strong>${escapeHtml(colaborador.puesto || "—")}</strong>${salarioTexto ? `, con un salario mensual de <strong>${escapeHtml(salarioTexto)}</strong>` : ""}.`
-      : `Por este medio hago constar que <strong>${escapeHtml(colaborador.full_name)}</strong> laboró/labora en Grupo IMISA desde el <strong>${fmtDate(colaborador.fecha_ingreso)}</strong>${colaborador.fecha_egreso ? ` hasta el <strong>${fmtDate(colaborador.fecha_egreso)}</strong>` : ""}, desempeñando el puesto de <strong>${escapeHtml(colaborador.puesto || "—")}</strong>. ${escapeHtml(motivo || "")}`;
+const BONIFICACION_INCENTIVO_LEY = 250; // Decreto 37-2001, Ley de Bonificación Incentivo
+
+const LETTERHEAD_POR_EMPRESA = {
+  "accesorios ilimitados": {
+    logo: "/assets/logo-accesorios-ilimitados.jpg",
+    razonSocial: "Accesorios Ilimitados, Sociedad Anónima",
+    direccion: "6ª. Avenida 9-39 Zona 9, Guatemala C.A.",
+    telefono: "(502) 2326-1919",
+    email: "accesorios@imisagt.com",
+  },
+};
+
+function getLetterhead(empresa) {
+  return LETTERHEAD_POR_EMPRESA[(empresa || "").toLowerCase().trim()] || null;
+}
+
+function cartaHeaderFooterHtml(letterhead, nombreEmpresa) {
+  const header = letterhead
+    ? `<img src="${window.location.origin}${letterhead.logo}" alt="" style="height:70px;margin-bottom:24px">`
+    : `<div style="font-weight:700;font-size:18px;margin-bottom:24px">${escapeHtml(nombreEmpresa || "Grupo IMISA")}</div>`;
+  const footer = letterhead
+    ? `<div style="margin-top:70px;padding-top:10px;border-top:1px solid #999;font-size:10px;color:#555;text-align:center">
+        ${escapeHtml(letterhead.razonSocial)} · ${escapeHtml(letterhead.direccion)} · Tel. ${escapeHtml(letterhead.telefono)} · ${escapeHtml(letterhead.email)}
+      </div>`
+    : "";
+  return { header, footer };
+}
+
+function cartaLaboralHtml(colaborador) {
+  const letterhead = getLetterhead(colaborador.empresa);
+  const { header, footer } = cartaHeaderFooterHtml(letterhead, colaborador.empresa);
+  const rangoFechas = colaborador.fecha_egreso
+    ? `laboró en esta empresa desde el ${fechaCortaEs(colaborador.fecha_ingreso)} al ${fechaCortaEs(colaborador.fecha_egreso)}`
+    : `labora en esta empresa desde el ${fechaCortaEs(colaborador.fecha_ingreso)} a la fecha`;
 
   return `
-    <div class="print-area" style="max-width:700px;margin:0 auto;padding:40px;font-family:Georgia,serif;color:#111;background:#fff">
-      <p style="text-align:right">Guatemala, ${fecha}</p>
-      <h2 style="text-align:center;text-transform:uppercase;letter-spacing:.05em">${tipo === "ingreso" ? "Carta de ingreso laboral" : "Carta de recomendación laboral"}</h2>
-      ${destinatario ? `<p><strong>A quien interese: ${escapeHtml(destinatario)}</strong></p>` : `<p><strong>A quien interese:</strong></p>`}
-      <p style="line-height:1.8">${cuerpo}</p>
+    <div class="print-area" style="max-width:700px;margin:0 auto;padding:40px;font-family:Georgia,serif;color:#111;background:#fff;font-size:14px">
+      ${header}
+      <p><strong>A quien interese:</strong></p>
+      <p style="line-height:1.9;text-align:justify">
+        De acuerdo a lo establecido en el artículo 87 del Código de Trabajo, por este medio se hace constar que
+        <strong>${escapeHtml(colaborador.full_name)}</strong>, quien se identifica con Documento Personal de Identificación
+        -DPI- <strong>${escapeHtml(colaborador.dpi || "____________________")}</strong>, ${rangoFechas},
+        desempeñando el puesto de <strong>${escapeHtml(colaborador.puesto || "—")}</strong>.
+      </p>
+      <p style="line-height:1.9;text-align:justify">
+        Y para los usos que al interesado convengan, se extiende la presente constancia laboral en una hoja
+        membretada, firmada y sellada de la empresa, en la ciudad de Guatemala, a los ${fechaATextoEs(todayISO())}.
+      </p>
       <p style="margin-top:60px">Atentamente,</p>
-      <p style="margin-top:60px">_____________________________<br>Jefatura de Recursos Humanos<br>Grupo IMISA</p>
+      <p style="margin-top:70px">_____________________________<br>Recursos Humanos</p>
+      ${footer}
+    </div>
+  `;
+}
+
+function cartaIngresosHtml(colaborador, salarioMensual) {
+  const letterhead = getLetterhead(colaborador.empresa);
+  const { header, footer } = cartaHeaderFooterHtml(letterhead, colaborador.empresa);
+  const base = Math.max(0, salarioMensual - BONIFICACION_INCENTIVO_LEY);
+
+  return `
+    <div class="print-area" style="max-width:700px;margin:0 auto;padding:40px;font-family:Georgia,serif;color:#111;background:#fff;font-size:14px">
+      ${header}
+      <h2 style="text-align:center;text-transform:uppercase;letter-spacing:.05em;font-size:16px">Constancia de Ingresos</h2>
+      <p style="line-height:1.9;text-align:justify">
+        Por este medio, hacemos constar que <strong>${escapeHtml(colaborador.full_name)}</strong>, quien se identifica con
+        Documento Personal de Identificación -DPI- <strong>${escapeHtml(colaborador.dpi || "____________________")}</strong>,
+        labora en esta empresa desempeñando el puesto de <strong>${escapeHtml(colaborador.puesto || "—")}</strong>, desde el
+        ${fechaCortaEs(colaborador.fecha_ingreso)} a la fecha, devengando un salario mensual de
+        <strong>${montoATextoEs(salarioMensual)} (${fmtMoney(salarioMensual)})</strong> distribuidos de la siguiente manera:
+      </p>
+      <table style="width:100%;border-collapse:collapse;margin:18px 0">
+        <tr><td style="padding:4px 0">Salario Base</td><td style="padding:4px 0;text-align:right">${fmtMoney(base)}</td></tr>
+        <tr><td style="padding:4px 0">Bonificación Decreto 37/2001</td><td style="padding:4px 0;text-align:right">${fmtMoney(BONIFICACION_INCENTIVO_LEY)}</td></tr>
+        <tr style="border-top:1px solid #333;font-weight:700"><td style="padding:6px 0">Total Salario Mensual</td><td style="padding:6px 0;text-align:right">${fmtMoney(salarioMensual)}</td></tr>
+      </table>
+      <p style="line-height:1.9;text-align:justify">
+        Para los usos que al interesado convengan se extiende y firma la presente en la ciudad de Guatemala,
+        a los ${fechaATextoEs(todayISO())}.
+      </p>
+      <p style="margin-top:60px">Atentamente,</p>
+      <p style="margin-top:70px">_____________________________<br>Recursos Humanos</p>
+      ${footer}
     </div>
   `;
 }
@@ -1685,24 +1833,20 @@ async function renderCartas() {
   const colaboradores = await api.listProfiles();
   root.innerHTML = `
     <div class="card">
-      <div class="card-title">Generar carta</div>
+      <div class="card-title">Generar constancia</div>
       <form id="cartaForm">
         <div class="field"><label>Colaborador</label>
           <select class="select" name="colaborador_id" required><option value="">Selecciona…</option>
             ${colaboradores.map((c) => `<option value="${c.id}">${escapeHtml(c.full_name)}</option>`).join("")}
           </select>
         </div>
-        <div class="field"><label>Tipo de carta</label>
+        <div class="field"><label>Tipo</label>
           <select class="select" name="tipo">
-            <option value="ingreso">Carta de ingreso</option>
-            <option value="recomendacion">Carta de recomendación</option>
+            <option value="laboral">Constancia laboral</option>
+            <option value="ingresos">Constancia de ingresos</option>
           </select>
         </div>
-        <div class="field"><label>Dirigida a (opcional)</label><input class="input" name="destinatario" placeholder="Ej. Banco / Empresa"></div>
-        <div class="field"><label>Motivo / detalle adicional (opcional)</label><textarea class="textarea" name="motivo"></textarea></div>
-        <label style="display:flex;align-items:center;gap:8px;margin-bottom:16px;font-size:13px;color:var(--text-dim)">
-          <input type="checkbox" name="incluir_salario"> Incluir salario mensual en la carta de ingreso
-        </label>
+        <p class="field hint">Usa el DPI y el salario que tengas guardados en Planilla — revísalos antes de generar si no están completos.</p>
         <button class="btn btn-primary btn-block" type="submit">Generar e imprimir</button>
       </form>
     </div>
@@ -1713,34 +1857,35 @@ async function renderCartas() {
     const f = new FormData(e.target);
     const colaborador = colaboradores.find((c) => c.id === f.get("colaborador_id"));
     if (!colaborador) return toast("Selecciona un colaborador.", true);
+    const tipo = f.get("tipo");
 
     // Se abre la ventana de inmediato (dentro del gesto del usuario) para
     // evitar que el navegador bloquee el popup; el contenido se llena después.
     const win = window.open("", "_blank");
-
-    let salarioTexto = "";
-    if (f.get("incluir_salario")) {
-      try {
-        const comp = await api.getCompensacion(colaborador.id);
-        if (comp) salarioTexto = fmtMoney(comp.salario_mensual, comp.moneda);
-      } catch (err) {
-        console.error(err);
-      }
-    }
-
-    const html = cartaHtml({
-      tipo: f.get("tipo"),
-      colaborador,
-      destinatario: f.get("destinatario"),
-      motivo: f.get("motivo"),
-      salarioTexto,
-    });
-
     if (!win) {
       toast("El navegador bloqueó la ventana. Permite ventanas emergentes e intenta de nuevo.", true);
       return;
     }
-    win.document.write(`<!DOCTYPE html><html lang="es"><head><meta charset="utf-8"><title>Carta</title></head><body>${html}<script>window.onload=()=>window.print()<\/script></body></html>`);
+
+    let html;
+    if (tipo === "ingresos") {
+      let salarioMensual = 0;
+      try {
+        const comp = await api.getCompensacion(colaborador.id);
+        salarioMensual = Number(comp?.salario_mensual || 0);
+      } catch (err) {
+        console.error(err);
+      }
+      if (!salarioMensual) {
+        win.close();
+        return toast("Este colaborador no tiene salario mensual registrado en Planilla.", true);
+      }
+      html = cartaIngresosHtml(colaborador, salarioMensual);
+    } else {
+      html = cartaLaboralHtml(colaborador);
+    }
+
+    win.document.write(`<!DOCTYPE html><html lang="es"><head><meta charset="utf-8"><title>Constancia</title></head><body>${html}<script>window.onload=()=>window.print()<\/script></body></html>`);
     win.document.close();
   });
 }

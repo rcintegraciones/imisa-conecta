@@ -18,6 +18,7 @@ create table if not exists public.profiles (
   puesto text,
   area text,
   telefono text,
+  dpi text,
   foto_url text,
   fecha_nacimiento date,
   fecha_ingreso date,
@@ -36,6 +37,7 @@ alter table public.profiles add column if not exists jefe_id uuid references pub
 alter table public.profiles add column if not exists hora_entrada time;
 alter table public.profiles add column if not exists hora_salida time;
 alter table public.profiles add column if not exists aplica_comisiones boolean not null default false;
+alter table public.profiles add column if not exists dpi text;
 
 -- Crea el perfil automáticamente cuando se crea el usuario en Auth,
 -- leyendo los datos desde "User Metadata".
