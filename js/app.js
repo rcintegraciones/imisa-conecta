@@ -388,6 +388,7 @@ async function renderInicio() {
       </div>
       <div class="card">
         <div class="card-title">Mis datos</div>
+        <div class="list-row"><div class="list-row-main"><div class="list-row-title">Empresa</div></div><div>${escapeHtml(profile.empresa || "—")}</div></div>
         <div class="list-row"><div class="list-row-main"><div class="list-row-title">Puesto</div></div><div>${escapeHtml(profile.puesto || "—")}</div></div>
         <div class="list-row"><div class="list-row-main"><div class="list-row-title">Área</div></div><div>${escapeHtml(profile.area || "—")}</div></div>
         <div class="list-row"><div class="list-row-main"><div class="list-row-title">Fecha de ingreso</div></div><div>${fmtDate(profile.fecha_ingreso)}</div></div>
@@ -404,6 +405,59 @@ async function renderInicio() {
 // Vista: Planilla (RRHH)
 // ============================================================================
 
+function drawPlanillaTable(root, colaboradores, compById, empresaFiltro) {
+  const filtrados = empresaFiltro ? colaboradores.filter((p) => (p.empresa || "Sin empresa") === empresaFiltro) : colaboradores;
+
+  let totalMensual = 0;
+  let totalAnual = 0;
+  const rows = filtrados
+    .map((p) => {
+      const c = compById[p.id];
+      const mensual = Number(c?.salario_mensual || 0);
+      const anual = mensual * 12 + Number(c?.bono_anual || 0);
+      if (p.activo) {
+        totalMensual += mensual;
+        totalAnual += anual;
+      }
+      return `
+        <tr data-edit="${p.id}" style="cursor:pointer">
+          <td>${escapeHtml(p.full_name)}</td>
+          <td>${escapeHtml(p.empresa || "—")}</td>
+          <td>${escapeHtml(p.puesto || "—")}</td>
+          <td>${fmtDate(p.fecha_ingreso)}</td>
+          <td>${tiempoEnEmpresa(p.fecha_ingreso, p.fecha_egreso)}</td>
+          <td>${fmtMoney(mensual, c?.moneda)}</td>
+          <td>${fmtMoney(anual, c?.moneda)}</td>
+          <td><span class="pill pill-${p.activo ? "activo" : "inactivo"}">${p.activo ? "Activo" : "Inactivo"}</span></td>
+        </tr>
+      `;
+    })
+    .join("");
+
+  // Rotación simple: bajas en los últimos 12 meses / headcount promedio actual.
+  const hace12m = new Date();
+  hace12m.setFullYear(hace12m.getFullYear() - 1);
+  const bajas12m = filtrados.filter((p) => p.fecha_egreso && new Date(p.fecha_egreso) >= hace12m).length;
+  const activos = filtrados.filter((p) => p.activo).length;
+  const rotacion = activos > 0 ? ((bajas12m / activos) * 100).toFixed(1) : "0.0";
+
+  document.getElementById("planillaStats").innerHTML = `
+    <div class="stat-tile"><div class="stat-value">${activos}</div><div class="stat-label">Colaboradores activos</div></div>
+    <div class="stat-tile"><div class="stat-value">${fmtMoney(totalMensual)}</div><div class="stat-label">Compensación mensual</div></div>
+    <div class="stat-tile"><div class="stat-value">${fmtMoney(totalAnual)}</div><div class="stat-label">Compensación anual</div></div>
+    <div class="stat-tile"><div class="stat-value">${rotacion}%</div><div class="stat-label">Rotación (12 meses)</div></div>
+  `;
+  document.getElementById("planillaTableBody").innerHTML =
+    rows || `<tr><td colspan="8" class="empty-state">Sin colaboradores en esta empresa.</td></tr>`;
+
+  root.querySelectorAll("[data-edit]").forEach((tr) => {
+    tr.addEventListener("click", () => {
+      const p = colaboradores.find((c) => c.id === tr.dataset.edit);
+      openEditColaborador(p, compById[p.id]);
+    });
+  });
+}
+
 async function renderPlanilla() {
   const root = renderShell(`<div class="empty-state">Cargando…</div>`, "#/planilla");
   try {
@@ -412,62 +466,31 @@ async function renderPlanilla() {
       api.listCompensaciones(),
     ]);
     const compById = Object.fromEntries(compensaciones.map((c) => [c.colaborador_id, c]));
-
-    let totalMensual = 0;
-    let totalAnual = 0;
-    const rows = colaboradores
-      .map((p) => {
-        const c = compById[p.id];
-        const mensual = Number(c?.salario_mensual || 0);
-        const anual = mensual * 12 + Number(c?.bono_anual || 0);
-        if (p.activo) {
-          totalMensual += mensual;
-          totalAnual += anual;
-        }
-        return `
-          <tr data-edit="${p.id}" style="cursor:pointer">
-            <td>${escapeHtml(p.full_name)}</td>
-            <td>${escapeHtml(p.puesto || "—")}</td>
-            <td>${fmtDate(p.fecha_ingreso)}</td>
-            <td>${tiempoEnEmpresa(p.fecha_ingreso, p.fecha_egreso)}</td>
-            <td>${fmtMoney(mensual, c?.moneda)}</td>
-            <td>${fmtMoney(anual, c?.moneda)}</td>
-            <td><span class="pill pill-${p.activo ? "activo" : "inactivo"}">${p.activo ? "Activo" : "Inactivo"}</span></td>
-          </tr>
-        `;
-      })
-      .join("");
-
-    // Rotación simple: bajas en los últimos 12 meses / headcount promedio actual.
-    const hace12m = new Date();
-    hace12m.setFullYear(hace12m.getFullYear() - 1);
-    const bajas12m = colaboradores.filter((p) => p.fecha_egreso && new Date(p.fecha_egreso) >= hace12m).length;
-    const activos = colaboradores.filter((p) => p.activo).length;
-    const rotacion = activos > 0 ? ((bajas12m / activos) * 100).toFixed(1) : "0.0";
+    const empresas = [...new Set(colaboradores.map((p) => p.empresa || "Sin empresa"))].sort();
 
     root.innerHTML = `
-      <div class="stat-grid">
-        <div class="stat-tile"><div class="stat-value">${colaboradores.filter((p) => p.activo).length}</div><div class="stat-label">Colaboradores activos</div></div>
-        <div class="stat-tile"><div class="stat-value">${fmtMoney(totalMensual)}</div><div class="stat-label">Compensación mensual (planilla)</div></div>
-        <div class="stat-tile"><div class="stat-value">${fmtMoney(totalAnual)}</div><div class="stat-label">Compensación anual (planilla)</div></div>
-        <div class="stat-tile"><div class="stat-value">${rotacion}%</div><div class="stat-label">Rotación (12 meses)</div></div>
+      <div class="field" style="max-width:320px">
+        <label>Filtrar por empresa</label>
+        <select class="select" id="empresaFilter">
+          <option value="">Todas las empresas</option>
+          ${empresas.map((e) => `<option value="${escapeHtml(e)}">${escapeHtml(e)}</option>`).join("")}
+        </select>
       </div>
+      <div class="stat-grid" id="planillaStats"></div>
       <div class="card">
-        <div class="card-title">Planilla completa — click en una fila para editar</div>
+        <div class="card-title">Planilla — click en una fila para editar</div>
         <div class="table-wrap">
           <table class="data">
-            <thead><tr><th>Nombre</th><th>Puesto</th><th>Ingreso</th><th>Tiempo</th><th>Mensual</th><th>Anual</th><th>Estado</th></tr></thead>
-            <tbody>${rows || `<tr><td colspan="7" class="empty-state">Sin colaboradores todavía.</td></tr>`}</tbody>
+            <thead><tr><th>Nombre</th><th>Empresa</th><th>Puesto</th><th>Ingreso</th><th>Tiempo</th><th>Mensual</th><th>Anual</th><th>Estado</th></tr></thead>
+            <tbody id="planillaTableBody"></tbody>
           </table>
         </div>
       </div>
     `;
 
-    root.querySelectorAll("[data-edit]").forEach((tr) => {
-      tr.addEventListener("click", () => {
-        const p = colaboradores.find((c) => c.id === tr.dataset.edit);
-        openEditColaborador(p, compById[p.id]);
-      });
+    drawPlanillaTable(root, colaboradores, compById, "");
+    document.getElementById("empresaFilter").addEventListener("change", (e) => {
+      drawPlanillaTable(root, colaboradores, compById, e.target.value);
     });
   } catch (err) {
     handleErr(err);
@@ -478,9 +501,10 @@ function openEditColaborador(p, comp) {
   const modal = openModal(`Editar — ${p.full_name}`, `
     <form id="editColabForm">
       <div class="row-2">
+        <div class="field"><label>Empresa</label><input class="input" name="empresa" value="${escapeHtml(p.empresa || "")}" placeholder="Ej. Accesorios Ilimitados"></div>
         <div class="field"><label>Puesto</label><input class="input" name="puesto" value="${escapeHtml(p.puesto || "")}"></div>
-        <div class="field"><label>Área</label><input class="input" name="area" value="${escapeHtml(p.area || "")}"></div>
       </div>
+      <div class="field"><label>Área</label><input class="input" name="area" value="${escapeHtml(p.area || "")}"></div>
       <div class="row-2">
         <div class="field"><label>Fecha de ingreso</label><input class="input" type="date" name="fecha_ingreso" value="${p.fecha_ingreso || ""}"></div>
         <div class="field"><label>Fecha de nacimiento</label><input class="input" type="date" name="fecha_nacimiento" value="${p.fecha_nacimiento || ""}"></div>
@@ -507,6 +531,7 @@ function openEditColaborador(p, comp) {
     const f = new FormData(e.target);
     try {
       await api.updateProfile(p.id, {
+        empresa: f.get("empresa") || null,
         puesto: f.get("puesto") || null,
         area: f.get("area") || null,
         fecha_ingreso: f.get("fecha_ingreso") || null,

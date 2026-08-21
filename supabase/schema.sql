@@ -14,6 +14,7 @@ create table if not exists public.profiles (
   email text not null,
   full_name text not null,
   role text not null check (role in ('colaborador','rrhh')) default 'colaborador',
+  empresa text,
   puesto text,
   area text,
   telefono text,
@@ -24,6 +25,9 @@ create table if not exists public.profiles (
   activo boolean not null default true,
   created_at timestamptz not null default now()
 );
+
+-- Por si ya tenías la tabla creada de una corrida anterior de este script.
+alter table public.profiles add column if not exists empresa text;
 
 -- Crea el perfil automáticamente cuando se crea el usuario en Auth,
 -- leyendo los datos desde "User Metadata".
