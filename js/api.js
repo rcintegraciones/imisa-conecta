@@ -109,6 +109,50 @@ export async function listHistorialCompensacion(colaboradorId) {
 }
 
 // ---------------------------------------------------------------------------
+// Planilla mensual (base + incentivo + bonificación + comisiones)
+// ---------------------------------------------------------------------------
+
+export async function getPlanillaMensual(colaboradorId, periodo) {
+  const { data, error } = await supabase
+    .from("planilla_mensual")
+    .select("*")
+    .eq("colaborador_id", colaboradorId)
+    .eq("periodo", periodo)
+    .maybeSingle();
+  if (error) throw error;
+  return data;
+}
+
+export async function listPlanillaMensual(periodo) {
+  const { data, error } = await supabase.from("planilla_mensual").select("*").eq("periodo", periodo);
+  if (error) throw error;
+  return data;
+}
+
+export async function setPlanillaMensual(colaboradorId, periodo, { incentivo, bonificacion, comisiones }, userId) {
+  const comp = await getCompensacion(colaboradorId);
+  const { data, error } = await supabase
+    .from("planilla_mensual")
+    .upsert(
+      {
+        colaborador_id: colaboradorId,
+        periodo,
+        salario_base: Number(comp?.salario_mensual || 0),
+        incentivo: Number(incentivo || 0),
+        bonificacion: Number(bonificacion || 0),
+        comisiones: Number(comisiones || 0),
+        actualizado_por: userId,
+        updated_at: new Date().toISOString(),
+      },
+      { onConflict: "colaborador_id,periodo" }
+    )
+    .select()
+    .single();
+  if (error) throw error;
+  return data;
+}
+
+// ---------------------------------------------------------------------------
 // Vacaciones
 // ---------------------------------------------------------------------------
 
@@ -265,10 +309,96 @@ export async function listHorasExtra(colaboradorId, anio) {
   return data;
 }
 
-export async function registrarHorasExtra(colaboradorId, { fecha, horas, motivo }, userId) {
+export async function listHorasExtraPorPeriodo(colaboradorId, periodo) {
   const { data, error } = await supabase
     .from("horas_extra")
-    .insert({ colaborador_id: colaboradorId, fecha, horas, motivo, creado_por: userId })
+    .select("*")
+    .eq("colaborador_id", colaboradorId)
+    .eq("origen", "manual")
+    .gte("fecha", `${periodo}-01`)
+    .lte("fecha", `${periodo}-31`)
+    .order("fecha", { ascending: false });
+  if (error) throw error;
+  return data;
+}
+
+export async function listHorasExtraPendientesEquipo() {
+  // RLS ya filtra: RRHH ve todas, una jefatura solo ve las de sus subordinados.
+  const { data, error } = await supabase
+    .from("horas_extra")
+    .select("*, colaborador:profiles!horas_extra_colaborador_id_fkey(full_name)")
+    .eq("origen", "manual")
+    .eq("estado", "pendiente")
+    .order("fecha", { ascending: false });
+  if (error) throw error;
+  return data;
+}
+
+export async function listHorasExtraBiometrico(periodo) {
+  let query = supabase
+    .from("horas_extra")
+    .select("*, colaborador:profiles!horas_extra_colaborador_id_fkey(full_name)")
+    .eq("origen", "biometrico")
+    .order("fecha", { ascending: false });
+  if (periodo) query = query.gte("fecha", `${periodo}-01`).lte("fecha", `${periodo}-31`);
+  const { data, error } = await query;
+  if (error) throw error;
+  return data;
+}
+
+export async function registrarHorasExtra(colaboradorId, { fecha, hora_salida_real, horas, motivo }, userId) {
+  const { data, error } = await supabase
+    .from("horas_extra")
+    .insert({ colaborador_id: colaboradorId, fecha, hora_salida_real: hora_salida_real || null, horas, motivo, creado_por: userId })
+    .select()
+    .single();
+  if (error) throw error;
+  return data;
+}
+
+export async function validarHorasExtra(id, userId) {
+  const { data, error } = await supabase
+    .from("horas_extra")
+    .update({ estado: "validado", validado_por: userId, validado_at: new Date().toISOString() })
+    .eq("id", id)
+    .select()
+    .single();
+  if (error) throw error;
+  return data;
+}
+
+// ---------------------------------------------------------------------------
+// Cierres mensuales de horas extra ("congelar" -> calcula el monto)
+// ---------------------------------------------------------------------------
+
+export async function getCierreHorasExtra(colaboradorId, periodo) {
+  const { data, error } = await supabase
+    .from("cierres_horas_extra")
+    .select("*")
+    .eq("colaborador_id", colaboradorId)
+    .eq("periodo", periodo)
+    .maybeSingle();
+  if (error) throw error;
+  return data;
+}
+
+// Congela el mes: suma las horas extra manuales YA VALIDADAS de ese período y
+// calcula el monto con (salario_mensual / 30 / 8) x 1.5 x horas.
+export async function congelarHorasExtra(colaboradorId, periodo, userId) {
+  const [horasDelMes, comp] = await Promise.all([
+    listHorasExtraPorPeriodo(colaboradorId, periodo),
+    getCompensacion(colaboradorId),
+  ]);
+  const totalHoras = horasDelMes.filter((h) => h.estado === "validado").reduce((s, h) => s + Number(h.horas), 0);
+  const salarioMensual = Number(comp?.salario_mensual || 0);
+  const monto = (salarioMensual / 30 / 8) * 1.5 * totalHoras;
+
+  const { data, error } = await supabase
+    .from("cierres_horas_extra")
+    .upsert(
+      { colaborador_id: colaboradorId, periodo, total_horas: totalHoras, salario_usado: salarioMensual, monto, creado_por: userId },
+      { onConflict: "colaborador_id,periodo" }
+    )
     .select()
     .single();
   if (error) throw error;
@@ -289,10 +419,33 @@ export async function listEvaluaciones(colaboradorId) {
   return data;
 }
 
-export async function crearEvaluacion(colaboradorId, { periodo, resultado, comentarios }, userId) {
+// Para la vista admin: todas las evaluaciones con nombre del colaborador y de
+// quien evaluó, filtrables por periodo / área / colaborador.
+export async function listEvaluacionesAdmin({ periodo, colaboradorId } = {}) {
+  let query = supabase
+    .from("evaluaciones_desempeno")
+    .select(
+      "*, colaborador:profiles!evaluaciones_desempeno_colaborador_id_fkey(full_name, area), evaluador:profiles!evaluaciones_desempeno_creado_por_fkey(full_name)"
+    )
+    .order("created_at", { ascending: false });
+  if (periodo) query = query.eq("periodo", periodo);
+  if (colaboradorId) query = query.eq("colaborador_id", colaboradorId);
+  const { data, error } = await query;
+  if (error) throw error;
+  return data;
+}
+
+// Subordinados directos de un jefe (según el organigrama en profiles.jefe_id).
+export async function listSubordinados(jefeId) {
+  const { data, error } = await supabase.from("profiles").select("*").eq("jefe_id", jefeId).order("full_name");
+  if (error) throw error;
+  return data;
+}
+
+export async function crearEvaluacion(colaboradorId, { periodo, resultado, punteo, monto, comentarios }, userId) {
   const { data, error } = await supabase
     .from("evaluaciones_desempeno")
-    .insert({ colaborador_id: colaboradorId, periodo, resultado, comentarios, creado_por: userId })
+    .insert({ colaborador_id: colaboradorId, periodo, resultado, punteo: punteo ?? null, monto: monto ?? null, comentarios, creado_por: userId })
     .select()
     .single();
   if (error) throw error;

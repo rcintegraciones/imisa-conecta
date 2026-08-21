@@ -82,8 +82,84 @@ function monthDay(dateStr) {
 }
 
 function pillEstado(estado) {
-  const label = { pendiente: "Pendiente", aprobado: "Aprobado", rechazado: "Rechazado", listo: "Listo" }[estado] || estado;
+  const label = { pendiente: "Pendiente", aprobado: "Aprobado", rechazado: "Rechazado", listo: "Listo", validado: "Validado" }[estado] || estado;
   return `<span class="pill pill-${estado}">${escapeHtml(label)}</span>`;
+}
+
+function currentPeriodo() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+}
+
+function fmtPeriodo(periodo) {
+  const [y, m] = periodo.split("-").map(Number);
+  return new Date(y, m - 1, 1).toLocaleDateString("es-GT", { month: "long", year: "numeric" });
+}
+
+// Redondeo de horas extra: minutos después de la hora de salida programada.
+// 0-24 min no cuenta, 25-45 min = 0.5h, 45+ min = 1h (y se repite el patrón
+// por cada hora completa adicional).
+function calcularHorasExtra(horaSalidaProgramada, horaSalidaReal) {
+  if (!horaSalidaProgramada || !horaSalidaReal) return 0;
+  const [ph, pm] = horaSalidaProgramada.split(":").map(Number);
+  const [rh, rm] = horaSalidaReal.split(":").map(Number);
+  const minutosExtra = rh * 60 + rm - (ph * 60 + pm);
+  if (minutosExtra <= 0) return 0;
+  const horasCompletas = Math.floor(minutosExtra / 60);
+  const resto = minutosExtra % 60;
+  let extra = horasCompletas;
+  if (resto >= 45) extra += 1;
+  else if (resto >= 25) extra += 0.5;
+  return extra;
+}
+
+// Easter Sunday (algoritmo de Meeus/Jones/Butcher) — necesario para Jueves y
+// Viernes Santo, que se mueven cada año.
+function domingoDeResurreccion(year) {
+  const a = year % 19;
+  const b = Math.floor(year / 100);
+  const c = year % 100;
+  const d = Math.floor(b / 4);
+  const e = b % 4;
+  const f = Math.floor((b + 8) / 25);
+  const g = Math.floor((b - f + 1) / 3);
+  const h = (19 * a + b - d - g + 15) % 30;
+  const i = Math.floor(c / 4);
+  const k = c % 4;
+  const l = (32 + 2 * e + 2 * i - h - k) % 7;
+  const m = Math.floor((a + 11 * h + 22 * l) / 451);
+  const month = Math.floor((h + l - 7 * m + 114) / 31);
+  const day = ((h + l - 7 * m + 114) % 31) + 1;
+  return new Date(year, month - 1, day);
+}
+
+function addDays(date, days) {
+  const d = new Date(date);
+  d.setDate(d.getDate() + days);
+  return d;
+}
+
+function toISODate(date) {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+}
+
+// Feriados oficiales de Guatemala (Código de Trabajo art. 127) + 24/31 dic
+// como medio día, de costumbre en la mayoría de empresas.
+function getFeriadosGuatemala(year) {
+  const pascua = domingoDeResurreccion(year);
+  return [
+    { fecha: `${year}-01-01`, nombre: "Año Nuevo" },
+    { fecha: toISODate(addDays(pascua, -3)), nombre: "Jueves Santo" },
+    { fecha: toISODate(addDays(pascua, -2)), nombre: "Viernes Santo" },
+    { fecha: `${year}-05-01`, nombre: "Día del Trabajo" },
+    { fecha: `${year}-06-30`, nombre: "Día del Ejército" },
+    { fecha: `${year}-09-15`, nombre: "Independencia" },
+    { fecha: `${year}-10-20`, nombre: "Día de la Revolución" },
+    { fecha: `${year}-11-01`, nombre: "Todos los Santos" },
+    { fecha: `${year}-12-24`, nombre: "Nochebuena (medio día)" },
+    { fecha: `${year}-12-25`, nombre: "Navidad" },
+    { fecha: `${year}-12-31`, nombre: "Fin de año (medio día)" },
+  ];
 }
 
 function openModal(title, bodyHtml) {
@@ -453,7 +529,7 @@ function drawPlanillaTable(root, colaboradores, compById, empresaFiltro) {
   root.querySelectorAll("[data-edit]").forEach((tr) => {
     tr.addEventListener("click", () => {
       const p = colaboradores.find((c) => c.id === tr.dataset.edit);
-      openEditColaborador(p, compById[p.id]);
+      openEditColaborador(p, compById[p.id], colaboradores);
     });
   });
 }
@@ -486,29 +562,138 @@ async function renderPlanilla() {
           </table>
         </div>
       </div>
+      <div class="card">
+        <div class="card-title">Desglose mensual</div>
+        <div class="field" style="max-width:220px"><label>Mes</label><input class="input" type="month" id="periodoSelect" value="${currentPeriodo()}"></div>
+        <div class="table-wrap">
+          <table class="data">
+            <thead><tr><th>Nombre</th><th>Base</th><th>Incentivo</th><th>Bonificación</th><th>Horas extra</th><th>Comisiones</th><th>Total</th></tr></thead>
+            <tbody id="desgloseTableBody"></tbody>
+          </table>
+        </div>
+        <p class="field hint">Click en una fila para editar incentivo, bonificación o comisiones de ese mes. El salario base viene de la compensación del colaborador y las horas extra del cierre congelado en la pestaña Horas Extra.</p>
+      </div>
     `;
 
     drawPlanillaTable(root, colaboradores, compById, "");
     document.getElementById("empresaFilter").addEventListener("change", (e) => {
       drawPlanillaTable(root, colaboradores, compById, e.target.value);
     });
+
+    const periodoInput = document.getElementById("periodoSelect");
+    const redrawDesglose = () => drawDesgloseMensual(colaboradores, periodoInput.value);
+    await redrawDesglose();
+    periodoInput.addEventListener("change", redrawDesglose);
   } catch (err) {
     handleErr(err);
   }
 }
 
-function openEditColaborador(p, comp) {
+async function drawDesgloseMensual(colaboradores, periodo) {
+  const tbody = document.getElementById("desgloseTableBody");
+  tbody.innerHTML = `<tr><td colspan="7" class="empty-state">Cargando…</td></tr>`;
+  const activos = colaboradores.filter((p) => p.activo);
+  const [planillas, compensaciones, cierres] = await Promise.all([
+    api.listPlanillaMensual(periodo),
+    api.listCompensaciones(),
+    Promise.all(activos.map((p) => api.getCierreHorasExtra(p.id, periodo))),
+  ]);
+  const planById = Object.fromEntries(planillas.map((p) => [p.colaborador_id, p]));
+  const compById = Object.fromEntries(compensaciones.map((c) => [c.colaborador_id, c]));
+  const cierreById = Object.fromEntries(activos.map((p, i) => [p.id, cierres[i]]));
+
+  const rows = activos
+    .map((p) => {
+      const plan = planById[p.id];
+      const salarioBase = Number(compById[p.id]?.salario_mensual || 0);
+      const incentivo = Number(plan?.incentivo || 0);
+      const bonificacion = Number(plan?.bonificacion || 0);
+      const comisiones = p.aplica_comisiones ? Number(plan?.comisiones || 0) : 0;
+      const horasExtraMonto = Number(cierreById[p.id]?.monto || 0);
+      const total = salarioBase + incentivo + bonificacion + comisiones + horasExtraMonto;
+      return `
+        <tr data-edit-mensual="${p.id}" style="cursor:pointer">
+          <td>${escapeHtml(p.full_name)}</td>
+          <td>${fmtMoney(salarioBase)}</td>
+          <td>${fmtMoney(incentivo)}</td>
+          <td>${fmtMoney(bonificacion)}</td>
+          <td>${fmtMoney(horasExtraMonto)}</td>
+          <td>${p.aplica_comisiones ? fmtMoney(comisiones) : "—"}</td>
+          <td>${fmtMoney(total)}</td>
+        </tr>
+      `;
+    })
+    .join("");
+  tbody.innerHTML = rows || `<tr><td colspan="7" class="empty-state">Sin colaboradores activos.</td></tr>`;
+
+  tbody.querySelectorAll("[data-edit-mensual]").forEach((tr) => {
+    tr.addEventListener("click", () => {
+      const p = activos.find((c) => c.id === tr.dataset.editMensual);
+      openEditPlanillaMensual(p, planById[p.id], periodo, () => drawDesgloseMensual(colaboradores, periodo));
+    });
+  });
+}
+
+function openEditPlanillaMensual(p, plan, periodo, onSaved) {
+  const modal = openModal(`${p.full_name} — ${fmtPeriodo(periodo)}`, `
+    <form id="planMensualForm">
+      <div class="field"><label>Incentivo</label><input class="input" type="number" step="0.01" min="0" name="incentivo" value="${plan?.incentivo || 0}"></div>
+      <div class="field"><label>Bonificación</label><input class="input" type="number" step="0.01" min="0" name="bonificacion" value="${plan?.bonificacion || 0}"></div>
+      ${
+        p.aplica_comisiones
+          ? `<div class="field"><label>Comisiones</label><input class="input" type="number" step="0.01" min="0" name="comisiones" value="${plan?.comisiones || 0}"></div>`
+          : ""
+      }
+      <button class="btn btn-primary btn-block" type="submit">Guardar</button>
+    </form>
+  `);
+  modal.querySelector("#planMensualForm").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const f = new FormData(e.target);
+    try {
+      await api.setPlanillaMensual(
+        p.id,
+        periodo,
+        { incentivo: f.get("incentivo"), bonificacion: f.get("bonificacion"), comisiones: f.get("comisiones") },
+        profile.id
+      );
+      modal.remove();
+      toast("Guardado.");
+      onSaved();
+    } catch (err) {
+      handleErr(err);
+    }
+  });
+}
+
+function openEditColaborador(p, comp, todosColaboradores) {
+  const posiblesJefes = (todosColaboradores || []).filter((c) => c.id !== p.id);
   const modal = openModal(`Editar — ${p.full_name}`, `
     <form id="editColabForm">
       <div class="row-2">
         <div class="field"><label>Empresa</label><input class="input" name="empresa" value="${escapeHtml(p.empresa || "")}" placeholder="Ej. Accesorios Ilimitados"></div>
         <div class="field"><label>Puesto</label><input class="input" name="puesto" value="${escapeHtml(p.puesto || "")}"></div>
       </div>
-      <div class="field"><label>Área</label><input class="input" name="area" value="${escapeHtml(p.area || "")}"></div>
+      <div class="row-2">
+        <div class="field"><label>Área</label><input class="input" name="area" value="${escapeHtml(p.area || "")}"></div>
+        <div class="field"><label>Jefe directo</label>
+          <select class="select" name="jefe_id">
+            <option value="">Sin jefe asignado</option>
+            ${posiblesJefes.map((c) => `<option value="${c.id}" ${p.jefe_id === c.id ? "selected" : ""}>${escapeHtml(c.full_name)}</option>`).join("")}
+          </select>
+        </div>
+      </div>
       <div class="row-2">
         <div class="field"><label>Fecha de ingreso</label><input class="input" type="date" name="fecha_ingreso" value="${p.fecha_ingreso || ""}"></div>
         <div class="field"><label>Fecha de nacimiento</label><input class="input" type="date" name="fecha_nacimiento" value="${p.fecha_nacimiento || ""}"></div>
       </div>
+      <div class="row-2">
+        <div class="field"><label>Hora de entrada</label><input class="input" type="time" name="hora_entrada" value="${p.hora_entrada || ""}"></div>
+        <div class="field"><label>Hora de salida</label><input class="input" type="time" name="hora_salida" value="${p.hora_salida || ""}"></div>
+      </div>
+      <label style="display:flex;align-items:center;gap:8px;margin-bottom:16px;font-size:13px;color:var(--text-dim)">
+        <input type="checkbox" name="aplica_comisiones" ${p.aplica_comisiones ? "checked" : ""}> Aplica comisiones (ej. ventas)
+      </label>
       <div class="row-2">
         <div class="field"><label>Salario mensual</label><input class="input" type="number" step="0.01" min="0" name="salario_mensual" value="${comp?.salario_mensual || 0}"></div>
         <div class="field"><label>Bono anual</label><input class="input" type="number" step="0.01" min="0" name="bono_anual" value="${comp?.bono_anual || 0}"></div>
@@ -534,9 +719,13 @@ function openEditColaborador(p, comp) {
         empresa: f.get("empresa") || null,
         puesto: f.get("puesto") || null,
         area: f.get("area") || null,
+        jefe_id: f.get("jefe_id") || null,
         fecha_ingreso: f.get("fecha_ingreso") || null,
         fecha_nacimiento: f.get("fecha_nacimiento") || null,
         fecha_egreso: f.get("fecha_egreso") || null,
+        hora_entrada: f.get("hora_entrada") || null,
+        hora_salida: f.get("hora_salida") || null,
+        aplica_comisiones: f.get("aplica_comisiones") === "on",
         activo: f.get("activo") === "true",
       });
       await api.setCompensacion(
@@ -934,56 +1123,128 @@ async function renderDocumentos() {
 // Vista: Horas extra
 // ============================================================================
 
-async function renderHorasExtraPara(colaboradorId, host, showForm) {
-  const anio = new Date().getFullYear();
+function formHorasExtraHtml(colaborador) {
+  const tieneHorario = !!colaborador.hora_salida;
+  return `
+    <form id="heForm" style="margin-bottom:14px">
+      <div class="row-2">
+        <div class="field"><label>Fecha</label><input class="input" type="date" name="fecha" value="${todayISO()}" required></div>
+        ${
+          tieneHorario
+            ? `<div class="field"><label>Hora de salida real</label><input class="input" type="time" name="hora_salida_real" required></div>`
+            : `<div class="field"><label>Horas extra</label><input class="input" type="number" step="0.25" min="0" name="horas_manual" required></div>`
+        }
+      </div>
+      ${tieneHorario ? `<div class="field hint" id="heCalcPreview">Su hora de salida programada es ${colaborador.hora_salida}. 0–24 min tarde no cuenta, 25–45 min = 0.5h, 45+ min = 1h.</div>` : ""}
+      <div class="field"><label>Motivo (opcional)</label><input class="input" name="motivo"></div>
+      <button class="btn btn-primary btn-block" type="submit">Registrar</button>
+    </form>
+  `;
+}
+
+function attachHorasExtraForm(host, colaborador, onRegistered) {
+  const form = host.querySelector("#heForm");
+  if (!form) return;
+  if (colaborador.hora_salida) {
+    form.hora_salida_real.addEventListener("change", () => {
+      const horas = calcularHorasExtra(colaborador.hora_salida, form.hora_salida_real.value);
+      document.getElementById("heCalcPreview").textContent = `Horas extra calculadas: ${horas}h (salida programada ${colaborador.hora_salida}).`;
+    });
+  }
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const f = new FormData(form);
+    const horas = colaborador.hora_salida
+      ? calcularHorasExtra(colaborador.hora_salida, f.get("hora_salida_real"))
+      : Number(f.get("horas_manual"));
+    if (!horas || horas <= 0) return toast("No hay horas extra que registrar con esos datos.", true);
+    try {
+      await api.registrarHorasExtra(
+        colaborador.id,
+        { fecha: f.get("fecha"), hora_salida_real: f.get("hora_salida_real") || null, horas, motivo: f.get("motivo") || null },
+        profile.id
+      );
+      toast(`Registradas ${horas}h (quedan pendientes de validación).`);
+      onRegistered();
+    } catch (err) {
+      handleErr(err);
+    }
+  });
+}
+
+async function renderMisHorasExtra(host, colaborador) {
+  const periodo = currentPeriodo();
   host.innerHTML = `<div class="empty-state">Cargando…</div>`;
-  const registros = await api.listHorasExtra(colaboradorId, anio);
-  const total = registros.reduce((s, r) => s + Number(r.horas), 0);
+  const registros = await api.listHorasExtraPorPeriodo(colaborador.id, periodo);
+  const validadas = registros.filter((r) => r.estado === "validado").reduce((s, r) => s + Number(r.horas), 0);
+  const pendientes = registros.filter((r) => r.estado === "pendiente").reduce((s, r) => s + Number(r.horas), 0);
   host.innerHTML = `
     <div class="stat-grid">
-      <div class="stat-tile"><div class="stat-value">${total}</div><div class="stat-label">Horas extra en ${anio}</div></div>
+      <div class="stat-tile"><div class="stat-value">${validadas}</div><div class="stat-label">Horas validadas — ${fmtPeriodo(periodo)}</div></div>
+      <div class="stat-tile"><div class="stat-value">${pendientes}</div><div class="stat-label">Horas pendientes</div></div>
     </div>
-    ${
-      showForm
-        ? `<form id="heForm" class="row-2" style="align-items:end;margin-bottom:14px">
-            <div class="field"><label>Fecha</label><input class="input" type="date" name="fecha" value="${todayISO()}" required></div>
-            <div class="field"><label>Horas</label><input class="input" type="number" step="0.25" min="0" name="horas" required></div>
-            <div class="field" style="grid-column:1/-1"><label>Motivo (opcional)</label><input class="input" name="motivo"></div>
-            <button class="btn btn-primary" style="grid-column:1/-1" type="submit">Registrar</button>
-          </form>`
-        : ""
-    }
+    ${formHorasExtraHtml(colaborador)}
     ${
       registros.length
-        ? registros.map((r) => `<div class="list-row"><div class="list-row-main"><div class="list-row-title">${fmtDate(r.fecha)}</div><div class="list-row-sub">${escapeHtml(r.motivo || "")}</div></div><div>${r.horas} h</div></div>`).join("")
-        : `<div class="empty-state">Sin registros en ${anio}.</div>`
+        ? registros
+            .map(
+              (r) => `<div class="list-row"><div class="list-row-main"><div class="list-row-title">${fmtDate(r.fecha)} — ${r.horas}h</div><div class="list-row-sub">${escapeHtml(r.motivo || "")}</div></div>${pillEstado(r.estado)}</div>`
+            )
+            .join("")
+        : `<div class="empty-state">Sin registros en ${fmtPeriodo(periodo)}.</div>`
     }
   `;
+  attachHorasExtraForm(host, colaborador, () => renderMisHorasExtra(host, colaborador));
+}
 
-  if (showForm) {
-    host.querySelector("#heForm").addEventListener("submit", async (e) => {
-      e.preventDefault();
-      const f = new FormData(e.target);
+async function renderEquipoHorasExtra(host) {
+  const pendientes = await api.listHorasExtraPendientesEquipo();
+  host.innerHTML = `
+    <div class="card-title">Mi equipo — pendientes de validar</div>
+    ${
+      pendientes.length
+        ? pendientes
+            .map(
+              (r) => `
+        <div class="list-row">
+          <div class="list-row-main"><div class="list-row-title">${escapeHtml(r.colaborador?.full_name || "—")} — ${fmtDate(r.fecha)}</div><div class="list-row-sub">${r.horas}h · ${escapeHtml(r.motivo || "")}</div></div>
+          <button class="btn btn-green btn-sm" data-validar="${r.id}">Validar</button>
+        </div>`
+            )
+            .join("")
+        : `<div class="empty-state">Sin pendientes de tu equipo.</div>`
+    }
+  `;
+  host.querySelectorAll("[data-validar]").forEach((btn) =>
+    btn.addEventListener("click", async () => {
       try {
-        await api.registrarHorasExtra(colaboradorId, { fecha: f.get("fecha"), horas: Number(f.get("horas")), motivo: f.get("motivo") || null }, profile.id);
-        toast("Horas registradas.");
-        renderHorasExtraPara(colaboradorId, host, true);
+        await api.validarHorasExtra(btn.dataset.validar, profile.id);
+        toast("Horas validadas.");
+        renderEquipoHorasExtra(host);
       } catch (err) {
         handleErr(err);
       }
-    });
-  }
+    })
+  );
 }
 
 async function renderHorasExtra() {
   const root = renderShell(`<div class="empty-state">Cargando…</div>`, "#/horas-extra");
+
   if (profile.role !== "rrhh") {
-    root.innerHTML = `<div class="card"><div class="card-title">Mis horas extra</div><div id="heHost"></div></div>`;
-    await renderHorasExtraPara(profile.id, document.getElementById("heHost"), false);
+    const subordinados = await api.listSubordinados(profile.id);
+    root.innerHTML = `
+      <div class="card"><div class="card-title">Mis horas extra</div><div id="misHeHost"></div></div>
+      ${subordinados.length ? `<div class="card" id="equipoHeHost"></div>` : ""}
+    `;
+    await renderMisHorasExtra(document.getElementById("misHeHost"), profile);
+    if (subordinados.length) await renderEquipoHorasExtra(document.getElementById("equipoHeHost"));
     return;
   }
+
   const colaboradores = await api.listProfiles();
   root.innerHTML = `
+    <div class="card" id="pendientesHost"></div>
     <div class="card">
       <div class="card-title">Registrar horas extra</div>
       <div class="field"><select class="select" id="colabSelect"><option value="">Selecciona un colaborador…</option>
@@ -991,15 +1252,87 @@ async function renderHorasExtra() {
       </select></div>
       <div id="heHost"></div>
     </div>
+    <div class="card">
+      <div class="card-title">Congelar mes (calcula el monto)</div>
+      <div class="row-2">
+        <div class="field"><label>Colaborador</label>
+          <select class="select" id="congelarColabSelect"><option value="">Selecciona…</option>
+            ${colaboradores.map((c) => `<option value="${c.id}">${escapeHtml(c.full_name)}</option>`).join("")}
+          </select>
+        </div>
+        <div class="field"><label>Mes</label><input class="input" type="month" id="congelarPeriodo" value="${currentPeriodo()}"></div>
+      </div>
+      <div id="congelarHost"></div>
+    </div>
+    <div class="card">
+      <div class="card-title">Registro biométrico</div>
+      <div class="field" style="max-width:220px"><label>Mes</label><input class="input" type="month" id="biometricoPeriodo" value="${currentPeriodo()}"></div>
+      <div id="biometricoHost"></div>
+    </div>
   `;
+
+  await renderEquipoHorasExtra(document.getElementById("pendientesHost"));
+
   document.getElementById("colabSelect").addEventListener("change", async (e) => {
     const host = document.getElementById("heHost");
     if (!e.target.value) {
       host.innerHTML = "";
       return;
     }
-    await renderHorasExtraPara(e.target.value, host, true);
+    const colaborador = colaboradores.find((c) => c.id === e.target.value);
+    await renderMisHorasExtra(host, colaborador);
   });
+
+  const drawCongelar = async () => {
+    const colabId = document.getElementById("congelarColabSelect").value;
+    const periodo = document.getElementById("congelarPeriodo").value;
+    const host = document.getElementById("congelarHost");
+    if (!colabId) {
+      host.innerHTML = "";
+      return;
+    }
+    host.innerHTML = `<div class="empty-state">Cargando…</div>`;
+    const [registros, cierre] = await Promise.all([
+      api.listHorasExtraPorPeriodo(colabId, periodo),
+      api.getCierreHorasExtra(colabId, periodo),
+    ]);
+    const validadas = registros.filter((r) => r.estado === "validado").reduce((s, r) => s + Number(r.horas), 0);
+    host.innerHTML = `
+      <div class="stat-grid">
+        <div class="stat-tile"><div class="stat-value">${validadas}</div><div class="stat-label">Horas validadas del mes</div></div>
+        ${cierre ? `<div class="stat-tile"><div class="stat-value">${fmtMoney(cierre.monto)}</div><div class="stat-label">Ya congelado</div></div>` : ""}
+      </div>
+      <button class="btn btn-primary" id="congelarBtn">${cierre ? "Recalcular y congelar de nuevo" : "Congelar y calcular monto"}</button>
+    `;
+    document.getElementById("congelarBtn").addEventListener("click", async () => {
+      try {
+        const resultado = await api.congelarHorasExtra(colabId, periodo, profile.id);
+        toast(`Congelado: ${fmtMoney(resultado.monto)}`);
+        drawCongelar();
+      } catch (err) {
+        handleErr(err);
+      }
+    });
+  };
+  document.getElementById("congelarColabSelect").addEventListener("change", drawCongelar);
+  document.getElementById("congelarPeriodo").addEventListener("change", drawCongelar);
+
+  const drawBiometrico = async () => {
+    const periodo = document.getElementById("biometricoPeriodo").value;
+    const host = document.getElementById("biometricoHost");
+    host.innerHTML = `<div class="empty-state">Cargando…</div>`;
+    const registros = await api.listHorasExtraBiometrico(periodo);
+    host.innerHTML = registros.length
+      ? `<div class="table-wrap"><table class="data">
+          <thead><tr><th>Colaborador</th><th>Fecha</th><th>Hora salida</th><th>Horas extra</th></tr></thead>
+          <tbody>${registros
+            .map((r) => `<tr><td>${escapeHtml(r.colaborador?.full_name || "—")}</td><td>${fmtDate(r.fecha)}</td><td>${r.hora_salida_real || "—"}</td><td>${r.horas}h</td></tr>`)
+            .join("")}</tbody>
+        </table></div>`
+      : `<div class="empty-state">Sin registros biométricos en ${fmtPeriodo(periodo)}. (Se llenan automáticamente desde n8n.)</div>`;
+  };
+  document.getElementById("biometricoPeriodo").addEventListener("change", drawBiometrico);
+  await drawBiometrico();
 }
 
 // ============================================================================
@@ -1015,8 +1348,9 @@ async function renderEvaluacionesPara(colaboradorId, host, showForm) {
         ? `<form id="evalForm" style="margin-bottom:14px">
             <div class="row-2">
               <div class="field"><label>Periodo</label><input class="input" name="periodo" placeholder="Ej. 2026 - S1" required></div>
-              <div class="field"><label>Resultado</label><input class="input" name="resultado" placeholder="Ej. Sobresaliente" required></div>
+              <div class="field"><label>Punteo</label><input class="input" type="number" step="0.01" name="punteo" placeholder="Ej. 85"></div>
             </div>
+            <div class="field"><label>Resultado</label><input class="input" name="resultado" placeholder="Ej. Sobresaliente" required></div>
             <div class="field"><label>Comentarios</label><textarea class="textarea" name="comentarios"></textarea></div>
             <button class="btn btn-primary btn-block" type="submit">Registrar evaluación</button>
           </form>`
@@ -1024,7 +1358,11 @@ async function renderEvaluacionesPara(colaboradorId, host, showForm) {
     }
     ${
       evals.length
-        ? evals.map((e) => `<div class="list-row"><div class="list-row-main"><div class="list-row-title">${escapeHtml(e.periodo)} — ${escapeHtml(e.resultado)}</div><div class="list-row-sub">${escapeHtml(e.comentarios || "")}</div></div></div>`).join("")
+        ? evals
+            .map(
+              (e) => `<div class="list-row"><div class="list-row-main"><div class="list-row-title">${escapeHtml(e.periodo)} — ${escapeHtml(e.resultado)}${e.punteo != null ? ` (${e.punteo} pts)` : ""}</div><div class="list-row-sub">${escapeHtml(e.comentarios || "")}</div></div></div>`
+            )
+            .join("")
         : `<div class="empty-state">Sin evaluaciones registradas.</div>`
     }
   `;
@@ -1033,7 +1371,11 @@ async function renderEvaluacionesPara(colaboradorId, host, showForm) {
       e.preventDefault();
       const f = new FormData(e.target);
       try {
-        await api.crearEvaluacion(colaboradorId, { periodo: f.get("periodo"), resultado: f.get("resultado"), comentarios: f.get("comentarios") || null }, profile.id);
+        await api.crearEvaluacion(
+          colaboradorId,
+          { periodo: f.get("periodo"), resultado: f.get("resultado"), punteo: f.get("punteo") ? Number(f.get("punteo")) : null, comentarios: f.get("comentarios") || null },
+          profile.id
+        );
         toast("Evaluación registrada.");
         renderEvaluacionesPara(colaboradorId, host, true);
       } catch (err) {
@@ -1043,31 +1385,99 @@ async function renderEvaluacionesPara(colaboradorId, host, showForm) {
   }
 }
 
-async function renderEvaluaciones() {
+async function renderEvaluacionesAdmin() {
   const root = renderShell(`<div class="empty-state">Cargando…</div>`, "#/evaluaciones");
-  if (profile.role !== "rrhh") {
-    root.innerHTML = `<div class="card"><div class="card-title">Mis evaluaciones de desempeño</div><div id="evalHost"></div></div>`;
-    await renderEvaluacionesPara(profile.id, document.getElementById("evalHost"), false);
-    return;
-  }
   const colaboradores = await api.listProfiles();
+  const areas = [...new Set(colaboradores.map((p) => p.area || "Sin área"))].sort();
+
   root.innerHTML = `
     <div class="card">
-      <div class="card-title">Evaluaciones de desempeño</div>
-      <div class="field"><select class="select" id="colabSelect"><option value="">Selecciona un colaborador…</option>
-        ${colaboradores.map((c) => `<option value="${c.id}">${escapeHtml(c.full_name)}</option>`).join("")}
-      </select></div>
-      <div id="evalHost"></div>
+      <div class="card-title">Evaluaciones de desempeño — todas</div>
+      <div class="row-2">
+        <div class="field"><label>Periodo</label><input class="input" id="fPeriodo" placeholder="Ej. 2026 - S1"></div>
+        <div class="field"><label>Área</label>
+          <select class="select" id="fArea"><option value="">Todas</option>${areas.map((a) => `<option value="${escapeHtml(a)}">${escapeHtml(a)}</option>`).join("")}</select>
+        </div>
+      </div>
+      <div class="field"><label>Colaborador</label>
+        <select class="select" id="fColab"><option value="">Todos</option>${colaboradores.map((c) => `<option value="${c.id}">${escapeHtml(c.full_name)}</option>`).join("")}</select>
+      </div>
+      <div class="table-wrap">
+        <table class="data">
+          <thead><tr><th>Colaborador</th><th>Área</th><th>Evaluó</th><th>Periodo</th><th>Resultado</th><th>Punteo</th><th>Monto</th></tr></thead>
+          <tbody id="evalAdminBody"></tbody>
+        </table>
+      </div>
     </div>
   `;
-  document.getElementById("colabSelect").addEventListener("change", async (e) => {
-    const host = document.getElementById("evalHost");
-    if (!e.target.value) {
-      host.innerHTML = "";
-      return;
+
+  const redraw = async () => {
+    const tbody = document.getElementById("evalAdminBody");
+    tbody.innerHTML = `<tr><td colspan="7" class="empty-state">Cargando…</td></tr>`;
+    const periodo = document.getElementById("fPeriodo").value.trim();
+    const area = document.getElementById("fArea").value;
+    const colaboradorId = document.getElementById("fColab").value;
+    let evals = await api.listEvaluacionesAdmin({ periodo: periodo || undefined, colaboradorId: colaboradorId || undefined });
+    if (area) evals = evals.filter((e) => (e.colaborador?.area || "Sin área") === area);
+    tbody.innerHTML = evals.length
+      ? evals
+          .map(
+            (e) => `<tr>
+              <td>${escapeHtml(e.colaborador?.full_name || "—")}</td>
+              <td>${escapeHtml(e.colaborador?.area || "—")}</td>
+              <td>${escapeHtml(e.evaluador?.full_name || "—")}</td>
+              <td>${escapeHtml(e.periodo)}</td>
+              <td>${escapeHtml(e.resultado)}</td>
+              <td>${e.punteo ?? "—"}</td>
+              <td>${e.monto != null ? fmtMoney(e.monto) : "—"}</td>
+            </tr>`
+          )
+          .join("")
+      : `<tr><td colspan="7" class="empty-state">Sin resultados.</td></tr>`;
+  };
+
+  document.getElementById("fPeriodo").addEventListener("change", redraw);
+  document.getElementById("fArea").addEventListener("change", redraw);
+  document.getElementById("fColab").addEventListener("change", redraw);
+  await redraw();
+}
+
+async function renderEvaluaciones() {
+  if (profile.role === "rrhh") {
+    await renderEvaluacionesAdmin();
+    return;
+  }
+
+  const root = renderShell(`<div class="empty-state">Cargando…</div>`, "#/evaluaciones");
+  const subordinados = await api.listSubordinados(profile.id);
+
+  root.innerHTML = `
+    ${
+      subordinados.length
+        ? `<div class="card">
+            <div class="card-title">Mi equipo — evaluar</div>
+            <div class="field"><select class="select" id="colabSelect"><option value="">Selecciona un colaborador…</option>
+              ${subordinados.map((c) => `<option value="${c.id}">${escapeHtml(c.full_name)}</option>`).join("")}
+            </select></div>
+            <div id="evalEquipoHost"></div>
+          </div>`
+        : ""
     }
-    await renderEvaluacionesPara(e.target.value, host, true);
-  });
+    <div class="card"><div class="card-title">Mis evaluaciones de desempeño</div><div id="evalHost"></div></div>
+  `;
+
+  await renderEvaluacionesPara(profile.id, document.getElementById("evalHost"), false);
+
+  if (subordinados.length) {
+    document.getElementById("colabSelect").addEventListener("change", async (e) => {
+      const host = document.getElementById("evalEquipoHost");
+      if (!e.target.value) {
+        host.innerHTML = "";
+        return;
+      }
+      await renderEvaluacionesPara(e.target.value, host, true);
+    });
+  }
 }
 
 // ============================================================================
@@ -1107,11 +1517,18 @@ async function drawCalendar(root, isRrhh) {
     if (d.getFullYear() === year && d.getMonth() === month) (actPorDia[d.getDate()] ||= []).push(a);
   });
 
+  const feriadosPorDia = {};
+  getFeriadosGuatemala(year).forEach((f) => {
+    const d = new Date(f.fecha + "T12:00:00");
+    if (d.getMonth() === month) (feriadosPorDia[d.getDate()] ||= []).push(f);
+  });
+
   let cells = "";
   for (let i = 0; i < startOffset; i++) cells += `<div class="cal-day other-month"></div>`;
   for (let d = 1; d <= daysInMonth; d++) {
     const isToday = today.getFullYear() === year && today.getMonth() === month && today.getDate() === d;
     const events = [
+      ...(feriadosPorDia[d] || []).map((f) => `<div class="cal-event feriado">🇬🇹 ${escapeHtml(f.nombre)}</div>`),
       ...(cumplePorDia[d] || []).map((n) => `<div class="cal-event birthday">🎂 ${escapeHtml(n)}</div>`),
       ...(actPorDia[d] || []).map((a) => `<div class="cal-event actividad" data-act="${a.id}" ${isRrhh ? 'style="cursor:pointer"' : ""}>${escapeHtml(a.titulo)}</div>`),
     ].join("");

@@ -23,11 +23,19 @@ create table if not exists public.profiles (
   fecha_ingreso date,
   fecha_egreso date,
   activo boolean not null default true,
+  jefe_id uuid references public.profiles(id),
+  hora_entrada time,
+  hora_salida time,
+  aplica_comisiones boolean not null default false,
   created_at timestamptz not null default now()
 );
 
 -- Por si ya tenías la tabla creada de una corrida anterior de este script.
 alter table public.profiles add column if not exists empresa text;
+alter table public.profiles add column if not exists jefe_id uuid references public.profiles(id);
+alter table public.profiles add column if not exists hora_entrada time;
+alter table public.profiles add column if not exists hora_salida time;
+alter table public.profiles add column if not exists aplica_comisiones boolean not null default false;
 
 -- Crea el perfil automáticamente cuando se crea el usuario en Auth,
 -- leyendo los datos desde "User Metadata".
@@ -62,6 +70,18 @@ returns text
 language sql stable security definer set search_path = public
 as $$
   select role from public.profiles where id = auth.uid();
+$$;
+
+-- true si el usuario actual es la jefatura directa del colaborador dado
+-- (según profiles.jefe_id, que se llena a partir del organigrama).
+create or replace function public.es_jefe_de(p_colaborador_id uuid)
+returns boolean
+language sql stable security definer set search_path = public
+as $$
+  select exists (
+    select 1 from public.profiles
+    where id = p_colaborador_id and jefe_id = auth.uid()
+  );
 $$;
 
 -- ----------------------------------------------------------------------------
@@ -162,11 +182,36 @@ create table if not exists public.horas_extra (
   id uuid primary key default gen_random_uuid(),
   colaborador_id uuid not null references public.profiles(id) on delete cascade,
   fecha date not null,
+  hora_salida_real time,
   horas numeric(6,2) not null,
   motivo text,
   origen text not null default 'manual' check (origen in ('manual','biometrico')),
+  estado text not null default 'pendiente' check (estado in ('pendiente','validado')),
+  validado_por uuid references public.profiles(id),
+  validado_at timestamptz,
   creado_por uuid references public.profiles(id),
   created_at timestamptz not null default now()
+);
+
+alter table public.horas_extra add column if not exists hora_salida_real time;
+alter table public.horas_extra add column if not exists estado text not null default 'pendiente' check (estado in ('pendiente','validado'));
+alter table public.horas_extra add column if not exists validado_por uuid references public.profiles(id);
+alter table public.horas_extra add column if not exists validado_at timestamptz;
+
+-- Cierre mensual de horas extra: al "congelar" un mes para un colaborador se
+-- guarda aquí el total de horas validadas y el monto ya calculado
+-- (salario_mensual / 30 / 8 x 1.5 x horas), usando el salario vigente en ese
+-- momento — así un cambio de salario después no altera cierres ya hechos.
+create table if not exists public.cierres_horas_extra (
+  id uuid primary key default gen_random_uuid(),
+  colaborador_id uuid not null references public.profiles(id) on delete cascade,
+  periodo text not null, -- 'YYYY-MM'
+  total_horas numeric(6,2) not null,
+  salario_usado numeric(12,2) not null,
+  monto numeric(12,2) not null,
+  creado_por uuid references public.profiles(id),
+  created_at timestamptz not null default now(),
+  unique (colaborador_id, periodo)
 );
 
 -- ----------------------------------------------------------------------------
@@ -177,10 +222,32 @@ create table if not exists public.evaluaciones_desempeno (
   colaborador_id uuid not null references public.profiles(id) on delete cascade,
   periodo text not null,
   resultado text not null,
+  punteo numeric(5,2),
+  monto numeric(12,2),
   comentarios text,
   storage_path text,
   creado_por uuid references public.profiles(id),
   created_at timestamptz not null default now()
+);
+
+alter table public.evaluaciones_desempeno add column if not exists punteo numeric(5,2);
+alter table public.evaluaciones_desempeno add column if not exists monto numeric(12,2);
+
+-- ----------------------------------------------------------------------------
+-- PLANILLA MENSUAL (desglose por colaborador y mes: base + incentivo +
+-- bonificación + comisiones; las horas extra se toman de cierres_horas_extra)
+-- ----------------------------------------------------------------------------
+create table if not exists public.planilla_mensual (
+  id uuid primary key default gen_random_uuid(),
+  colaborador_id uuid not null references public.profiles(id) on delete cascade,
+  periodo text not null, -- 'YYYY-MM'
+  salario_base numeric(12,2) not null default 0,
+  incentivo numeric(12,2) not null default 0,
+  bonificacion numeric(12,2) not null default 0,
+  comisiones numeric(12,2) not null default 0,
+  actualizado_por uuid references public.profiles(id),
+  updated_at timestamptz not null default now(),
+  unique (colaborador_id, periodo)
 );
 
 -- ----------------------------------------------------------------------------
@@ -218,7 +285,9 @@ alter table public.solicitudes_vacaciones enable row level security;
 alter table public.documentos enable row level security;
 alter table public.solicitudes_documentos enable row level security;
 alter table public.horas_extra enable row level security;
+alter table public.cierres_horas_extra enable row level security;
 alter table public.evaluaciones_desempeno enable row level security;
+alter table public.planilla_mensual enable row level security;
 alter table public.actividades enable row level security;
 alter table public.descripciones_roles enable row level security;
 
@@ -299,27 +368,72 @@ drop policy if exists solicitudes_doc_update_rrhh on public.solicitudes_document
 create policy solicitudes_doc_update_rrhh on public.solicitudes_documentos
   for update to authenticated using (public.current_role() = 'rrhh');
 
--- horas extra: cada quien ve las suyas (solo lectura); RRHH ve y registra todas.
+-- horas extra: cada quien ve/registra las suyas; su jefatura directa también
+-- las ve y las puede validar; RRHH ve, registra y valida todas.
 drop policy if exists horas_extra_select on public.horas_extra;
 create policy horas_extra_select on public.horas_extra
-  for select to authenticated using (colaborador_id = auth.uid() or public.current_role() = 'rrhh');
+  for select to authenticated using (
+    colaborador_id = auth.uid()
+    or public.es_jefe_de(colaborador_id)
+    or public.current_role() = 'rrhh'
+  );
 
 drop policy if exists horas_extra_write_rrhh on public.horas_extra;
-create policy horas_extra_write_rrhh on public.horas_extra
-  for insert to authenticated with check (public.current_role() = 'rrhh');
+drop policy if exists horas_extra_insert on public.horas_extra;
+create policy horas_extra_insert on public.horas_extra
+  for insert to authenticated with check (
+    colaborador_id = auth.uid() or public.current_role() = 'rrhh'
+  );
 
 drop policy if exists horas_extra_update_rrhh on public.horas_extra;
-create policy horas_extra_update_rrhh on public.horas_extra
-  for update to authenticated using (public.current_role() = 'rrhh');
+drop policy if exists horas_extra_update on public.horas_extra;
+create policy horas_extra_update on public.horas_extra
+  for update to authenticated using (
+    public.es_jefe_de(colaborador_id) or public.current_role() = 'rrhh'
+  );
 
--- evaluaciones: cada quien ve las suyas (solo lectura); RRHH ve y registra todas.
+-- cierres de horas extra: cada quien ve el suyo; su jefatura y RRHH ven y
+-- pueden crear el cierre (congelar) de sus colaboradores/subordinados.
+drop policy if exists cierres_he_select on public.cierres_horas_extra;
+create policy cierres_he_select on public.cierres_horas_extra
+  for select to authenticated using (
+    colaborador_id = auth.uid()
+    or public.es_jefe_de(colaborador_id)
+    or public.current_role() = 'rrhh'
+  );
+
+drop policy if exists cierres_he_insert on public.cierres_horas_extra;
+create policy cierres_he_insert on public.cierres_horas_extra
+  for insert to authenticated with check (
+    public.es_jefe_de(colaborador_id) or public.current_role() = 'rrhh'
+  );
+
+-- evaluaciones: cada quien ve las suyas; su jefatura directa ve y registra
+-- evaluaciones de sus subordinados; RRHH ve y registra todas.
 drop policy if exists evaluaciones_select on public.evaluaciones_desempeno;
 create policy evaluaciones_select on public.evaluaciones_desempeno
-  for select to authenticated using (colaborador_id = auth.uid() or public.current_role() = 'rrhh');
+  for select to authenticated using (
+    colaborador_id = auth.uid()
+    or public.es_jefe_de(colaborador_id)
+    or public.current_role() = 'rrhh'
+  );
 
 drop policy if exists evaluaciones_write_rrhh on public.evaluaciones_desempeno;
-create policy evaluaciones_write_rrhh on public.evaluaciones_desempeno
-  for insert to authenticated with check (public.current_role() = 'rrhh');
+drop policy if exists evaluaciones_insert on public.evaluaciones_desempeno;
+create policy evaluaciones_insert on public.evaluaciones_desempeno
+  for insert to authenticated with check (
+    public.es_jefe_de(colaborador_id) or public.current_role() = 'rrhh'
+  );
+
+-- planilla mensual: sensible como compensación — cada quien ve la suya,
+-- RRHH ve y edita todas (los montos de la planilla los define RRHH).
+drop policy if exists planilla_mensual_select on public.planilla_mensual;
+create policy planilla_mensual_select on public.planilla_mensual
+  for select to authenticated using (colaborador_id = auth.uid() or public.current_role() = 'rrhh');
+
+drop policy if exists planilla_mensual_write_rrhh on public.planilla_mensual;
+create policy planilla_mensual_write_rrhh on public.planilla_mensual
+  for all to authenticated using (public.current_role() = 'rrhh') with check (public.current_role() = 'rrhh');
 
 -- actividades: todos ven; solo RRHH crea/edita/borra.
 drop policy if exists actividades_select on public.actividades;
