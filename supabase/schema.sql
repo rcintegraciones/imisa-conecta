@@ -306,6 +306,19 @@ create table if not exists public.descripciones_roles (
   updated_at timestamptz not null default now(),
   updated_by uuid references public.profiles(id)
 );
+-- Campos del formato real de "Perfil y Descriptor de Puesto" de Grupo IMISA.
+alter table public.descripciones_roles add column if not exists codigo text;
+alter table public.descripciones_roles add column if not exists empresa text;
+alter table public.descripciones_roles add column if not exists area text;
+alter table public.descripciones_roles add column if not exists departamento text;
+alter table public.descripciones_roles add column if not exists lugar_trabajo text;
+alter table public.descripciones_roles add column if not exists jefe_inmediato text;
+alter table public.descripciones_roles add column if not exists nivel_jerarquico text;
+alter table public.descripciones_roles add column if not exists salario text;
+-- detalle: jsonb con el resto del formato (mision, funciones, indicadores,
+-- complejidad, responsabilidad, relaciones, condiciones, perfil, competencias,
+-- elaborado_por, revisado_por, fecha_elaboracion, fecha_revision), ver README.
+alter table public.descripciones_roles add column if not exists detalle jsonb;
 
 -- ============================================================================
 -- ROW LEVEL SECURITY

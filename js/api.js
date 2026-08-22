@@ -543,8 +543,18 @@ export async function listDescripcionesRoles() {
   return data;
 }
 
-export async function guardarDescripcionRol({ id, puesto, descripcion, requisitos }, userId) {
-  const payload = { puesto, descripcion, requisitos, updated_at: new Date().toISOString(), updated_by: userId };
+export async function guardarDescripcionRol({ id, puesto, descripcion, requisitos, codigo, empresa, area, jefe_inmediato }, userId) {
+  const payload = {
+    puesto,
+    descripcion,
+    requisitos,
+    codigo,
+    empresa,
+    area,
+    jefe_inmediato,
+    updated_at: new Date().toISOString(),
+    updated_by: userId,
+  };
   const { data, error } = id
     ? await supabase.from("descripciones_roles").update(payload).eq("id", id).select().single()
     : await supabase.from("descripciones_roles").insert(payload).select().single();

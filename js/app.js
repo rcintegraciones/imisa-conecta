@@ -1788,32 +1788,67 @@ async function renderRolesView() {
   const root = renderShell(`<div class="empty-state">Cargando…</div>`, "#/roles");
   const isRrhh = profile.role === "rrhh";
   const roles = await api.listDescripcionesRoles();
+  const empresas = [...new Set(roles.map((r) => r.empresa).filter(Boolean))].sort();
+
+  const drawList = (filtroEmpresa) => {
+    const listado = filtroEmpresa ? roles.filter((r) => r.empresa === filtroEmpresa) : roles;
+    root.querySelector("#rolesGrid").innerHTML = listado.length
+      ? listado
+          .map(
+            (r) => `
+      <div class="card">
+        <div class="card-title">${escapeHtml(r.puesto)}</div>
+        <p class="label-sm" style="margin:2px 0 8px">${[r.codigo, r.empresa, r.area].filter(Boolean).map(escapeHtml).join(" · ")}</p>
+        <p style="color:var(--text-dim);white-space:pre-wrap">${escapeHtml((r.descripcion || "Sin descripción.").slice(0, 220))}${(r.descripcion || "").length > 220 ? "…" : ""}</p>
+        <div style="display:flex;gap:8px;margin-top:10px">
+          <button class="btn btn-ghost btn-sm" data-ver-role="${r.id}">Ver detalle completo</button>
+          ${isRrhh ? `<button class="btn btn-ghost btn-sm" data-edit-role="${r.id}">Editar</button>` : ""}
+        </div>
+      </div>`
+          )
+          .join("")
+      : `<div class="empty-state">Aún no hay descripciones de puestos.</div>`;
+
+    root.querySelectorAll("[data-ver-role]").forEach((btn) =>
+      btn.addEventListener("click", () => verDetallePuesto(roles.find((r) => r.id === btn.dataset.verRole)))
+    );
+    if (isRrhh) {
+      root.querySelectorAll("[data-edit-role]").forEach((btn) =>
+        btn.addEventListener("click", () => openRoleForm(roles.find((r) => r.id === btn.dataset.editRole)))
+      );
+    }
+  };
 
   root.innerHTML = `
-    ${isRrhh ? `<div style="margin-bottom:14px"><button class="btn btn-primary" id="newRoleBtn">+ Nuevo puesto</button></div>` : ""}
-    ${
-      roles.length
-        ? roles
-            .map(
-              (r) => `
-        <div class="card">
-          <div class="card-title">${escapeHtml(r.puesto)}</div>
-          <p style="color:var(--text-dim);white-space:pre-wrap">${escapeHtml(r.descripcion || "Sin descripción.")}</p>
-          ${r.requisitos ? `<p class="label-sm" style="margin-bottom:4px">Requisitos</p><p style="color:var(--text-mute);white-space:pre-wrap">${escapeHtml(r.requisitos)}</p>` : ""}
-          ${isRrhh ? `<button class="btn btn-ghost btn-sm" data-edit-role="${r.id}">Editar</button>` : ""}
-        </div>`
-            )
-            .join("")
-        : `<div class="empty-state">Aún no hay descripciones de puestos.</div>`
-    }
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:14px;flex-wrap:wrap">
+      <div class="field" style="min-width:220px;margin:0">
+        <select class="input" id="filtroEmpresaRoles">
+          <option value="">Todas las empresas</option>
+          ${empresas.map((e) => `<option value="${escapeHtml(e)}">${escapeHtml(e)}</option>`).join("")}
+        </select>
+      </div>
+      ${isRrhh ? `<button class="btn btn-primary" id="newRoleBtn">+ Nuevo puesto</button>` : ""}
+    </div>
+    <div id="rolesGrid"></div>
   `;
+  drawList("");
+  document.getElementById("filtroEmpresaRoles").addEventListener("change", (e) => drawList(e.target.value));
 
   const openRoleForm = (r) => {
     const modal = openModal(r ? `Editar — ${r.puesto}` : "Nuevo puesto", `
       <form id="roleForm">
         <div class="field"><label>Puesto</label><input class="input" name="puesto" value="${escapeHtml(r?.puesto || "")}" required ${r ? "readonly" : ""}></div>
-        <div class="field"><label>Descripción</label><textarea class="textarea" name="descripcion">${escapeHtml(r?.descripcion || "")}</textarea></div>
-        <div class="field"><label>Requisitos</label><textarea class="textarea" name="requisitos">${escapeHtml(r?.requisitos || "")}</textarea></div>
+        <div class="row-2">
+          <div class="field"><label>Código</label><input class="input" name="codigo" value="${escapeHtml(r?.codigo || "")}"></div>
+          <div class="field"><label>Empresa</label><input class="input" name="empresa" value="${escapeHtml(r?.empresa || "")}"></div>
+        </div>
+        <div class="row-2">
+          <div class="field"><label>Área</label><input class="input" name="area" value="${escapeHtml(r?.area || "")}"></div>
+          <div class="field"><label>Jefe inmediato</label><input class="input" name="jefe_inmediato" value="${escapeHtml(r?.jefe_inmediato || "")}"></div>
+        </div>
+        <div class="field"><label>Misión del puesto</label><textarea class="textarea" name="descripcion">${escapeHtml(r?.descripcion || "")}</textarea></div>
+        <div class="field"><label>Perfil / requisitos (resumen)</label><textarea class="textarea" name="requisitos">${escapeHtml(r?.requisitos || "")}</textarea></div>
+        <p class="label-sm" style="color:var(--text-mute)">El detalle completo (funciones, competencias, perfil, etc.) se administra por archivo — pide el ajuste y se actualiza directamente.</p>
         <button class="btn btn-primary btn-block" type="submit">Guardar</button>
       </form>
     `);
@@ -1821,7 +1856,19 @@ async function renderRolesView() {
       e.preventDefault();
       const f = new FormData(e.target);
       try {
-        await api.guardarDescripcionRol({ id: r?.id, puesto: f.get("puesto"), descripcion: f.get("descripcion") || null, requisitos: f.get("requisitos") || null }, profile.id);
+        await api.guardarDescripcionRol(
+          {
+            id: r?.id,
+            puesto: f.get("puesto"),
+            descripcion: f.get("descripcion") || null,
+            requisitos: f.get("requisitos") || null,
+            codigo: f.get("codigo") || null,
+            empresa: f.get("empresa") || null,
+            area: f.get("area") || null,
+            jefe_inmediato: f.get("jefe_inmediato") || null,
+          },
+          profile.id
+        );
         modal.remove();
         toast("Guardado.");
         renderRolesView();
@@ -1831,12 +1878,135 @@ async function renderRolesView() {
     });
   };
 
-  if (isRrhh) {
-    document.getElementById("newRoleBtn").addEventListener("click", () => openRoleForm(null));
-    root.querySelectorAll("[data-edit-role]").forEach((btn) =>
-      btn.addEventListener("click", () => openRoleForm(roles.find((r) => r.id === btn.dataset.editRole)))
-    );
-  }
+  if (isRrhh) document.getElementById("newRoleBtn").addEventListener("click", () => openRoleForm(null));
+}
+
+function verDetallePuesto(r) {
+  const d = r.detalle || {};
+  const tabla = (rows, cols) =>
+    rows && rows.length
+      ? `<table style="width:100%;border-collapse:collapse;margin:6px 0 14px;font-size:13px">
+          <thead><tr>${cols.map((c) => `<th style="text-align:left;border-bottom:1px solid var(--border);padding:5px 6px;color:var(--text-mute)">${c.label}</th>`).join("")}</tr></thead>
+          <tbody>${rows
+            .map((row) => `<tr>${cols.map((c) => `<td style="padding:5px 6px;border-bottom:1px solid var(--border-soft,var(--border))">${escapeHtml(row[c.key] ?? "")}</td>`).join("")}</tr>`)
+            .join("")}</tbody>
+        </table>`
+      : "";
+
+  const funcionesPorCategoria = {};
+  (d.funciones || []).forEach((f) => {
+    const cat = f.categoria || "General";
+    (funcionesPorCategoria[cat] ||= []).push(f);
+  });
+
+  const perfil = d.perfil || {};
+  const perfilRow = (label, val) => (val ? `<div><span class="label-sm">${escapeHtml(label)}</span><div>${escapeHtml(val)}</div></div>` : "");
+
+  const modal = openModal(
+    `${r.puesto}${r.codigo ? ` (${r.codigo})` : ""}`,
+    `
+    <div style="max-height:70vh;overflow:auto">
+      <p class="label-sm">${[r.empresa, r.area, r.departamento, r.lugar_trabajo].filter(Boolean).map(escapeHtml).join(" · ")}</p>
+      <div class="row-2" style="margin:10px 0">
+        <div><span class="label-sm">Jefe inmediato</span><div>${escapeHtml(r.jefe_inmediato || "—")}</div></div>
+        <div><span class="label-sm">Nivel jerárquico</span><div>${escapeHtml(r.nivel_jerarquico || "—")}</div></div>
+        <div><span class="label-sm">No. de personas que supervisa</span><div>${escapeHtml(String(d.no_supervisa ?? "—"))}</div></div>
+        <div><span class="label-sm">Posiciones que supervisa</span><div>${escapeHtml(d.posiciones_supervisa || "—")}</div></div>
+      </div>
+
+      <h4>Misión del puesto</h4>
+      <p style="white-space:pre-wrap">${escapeHtml(r.descripcion || "")}</p>
+
+      ${
+        Object.keys(funcionesPorCategoria).length
+          ? `<h4>Funciones principales</h4>` +
+            Object.entries(funcionesPorCategoria)
+              .map(
+                ([cat, fns]) =>
+                  `<p class="label-sm" style="margin-top:10px">${escapeHtml(cat)}</p>` +
+                  tabla(fns, [
+                    { key: "funcion", label: "Función" },
+                    { key: "frecuencia", label: "Frecuencia" },
+                    { key: "tiempo", label: "Tiempo" },
+                  ])
+              )
+              .join("")
+          : ""
+      }
+
+      ${
+        d.indicadores?.length
+          ? `<h4>Métricas requeridas</h4>` +
+            tabla(d.indicadores, [
+              { key: "indicador", label: "Indicador" },
+              { key: "resultado_esperado", label: "Resultado esperado" },
+            ])
+          : ""
+      }
+
+      <h4>Complejidad del puesto</h4>
+      ${d.inversion_actividades ? `<p><strong>Inversión de actividades:</strong> ${escapeHtml(d.inversion_actividades)}</p>` : ""}
+      ${d.nivel_iniciativa ? `<p><strong>Nivel de iniciativa y autonomía:</strong> ${escapeHtml(d.nivel_iniciativa)}</p>` : ""}
+      ${d.toma_decisiones ? `<p><strong>Toma de decisiones:</strong> ${escapeHtml(d.toma_decisiones)}</p>` : ""}
+      ${d.riesgos ? `<p><strong>Riesgos:</strong><br>${escapeHtml(d.riesgos).replace(/\n/g, "<br>")}</p>` : ""}
+
+      <h4>Responsabilidad</h4>
+      ${d.manejo_activos ? `<p><strong>Manejo de activos:</strong> ${escapeHtml(d.manejo_activos)}</p>` : ""}
+      ${d.equipos_trabajo ? `<p><strong>Equipos de trabajo:</strong> ${escapeHtml(d.equipos_trabajo)}</p>` : ""}
+      ${d.equipos_seguridad ? `<p><strong>Equipos de seguridad:</strong> ${escapeHtml(d.equipos_seguridad)}</p>` : ""}
+
+      ${
+        d.relaciones_internas?.length || d.relaciones_externas?.length
+          ? `<h4>Relaciones internas y externas</h4>
+            ${d.relaciones_internas?.length ? `<p class="label-sm">Internas</p>` + tabla(d.relaciones_internas, [{ key: "departamento", label: "Departamento" }, { key: "frecuencia", label: "Frecuencia" }, { key: "proposito", label: "Propósito" }]) : ""}
+            ${d.relaciones_externas?.length ? `<p class="label-sm">Externas</p>` + tabla(d.relaciones_externas, [{ key: "persona", label: "Personas/Instituciones" }, { key: "frecuencia", label: "Frecuencia" }, { key: "proposito", label: "Propósito" }]) : ""}`
+          : ""
+      }
+
+      ${d.condiciones_trabajo ? `<h4>Condiciones de trabajo</h4><p style="white-space:pre-wrap">${escapeHtml(d.condiciones_trabajo)}</p>` : ""}
+      ${d.esfuerzo_fisico_mental ? `<h4>Nivel de esfuerzo físico y mental</h4><p style="white-space:pre-wrap">${escapeHtml(d.esfuerzo_fisico_mental)}</p>` : ""}
+
+      <h4>Perfil del puesto</h4>
+      <div class="row-2">
+        ${perfilRow("Edad", perfil.edad)}
+        ${perfilRow("Estado civil", perfil.estado_civil)}
+        ${perfilRow("Sexo", perfil.sexo)}
+        ${perfilRow("Idiomas requeridos", perfil.idiomas)}
+        ${perfilRow("Años de experiencia laboral", perfil.anios_experiencia)}
+        ${perfilRow("Formación académica", perfil.formacion_academica)}
+        ${perfilRow("Formación complementaria", perfil.formacion_complementaria)}
+        ${perfilRow("Conocimientos básicos", perfil.conocimientos_basicos)}
+        ${perfilRow("Habilidades específicas", perfil.habilidades_especificas)}
+        ${perfilRow("Conocimientos informáticos", perfil.conocimientos_informaticos)}
+        ${perfilRow("Sistemas especializados", perfil.sistemas_especializados)}
+        ${perfilRow("Salario", r.salario)}
+        ${perfilRow("Beneficios", perfil.beneficios)}
+        ${perfilRow("Se requiere viajar", perfil.se_requiere_viajar)}
+        ${perfilRow("Se requiere vehículo", perfil.se_requiere_vehiculo)}
+        ${perfilRow("Se requiere pasaporte/visa", perfil.se_requiere_pasaporte)}
+        ${perfilRow("Valores o actitudes", perfil.valores_actitudes)}
+      </div>
+
+      ${
+        d.competencias_generales?.length
+          ? `<h4>Competencias generales</h4>` + tabla(d.competencias_generales, [{ key: "competencia", label: "Competencia" }, { key: "grado", label: "Grado" }])
+          : ""
+      }
+      ${
+        d.competencias_especificas?.length
+          ? `<h4>Competencias específicas por área</h4>` + tabla(d.competencias_especificas, [{ key: "competencia", label: "Competencia" }, { key: "grado", label: "Grado" }])
+          : ""
+      }
+
+      <p class="label-sm" style="margin-top:16px">
+        Elaborado por: ${escapeHtml(d.elaborado_por || "—")} · Revisado por: ${escapeHtml(d.revisado_por || "—")}
+        ${d.fecha_elaboracion ? ` · Fecha: ${fmtDate(d.fecha_elaboracion)}` : ""}
+        ${d.version ? ` · ${escapeHtml(d.version)}` : ""}
+      </p>
+    </div>
+  `
+  );
+  return modal;
 }
 
 // ============================================================================
