@@ -796,7 +796,10 @@ function openEditColaborador(p, comp, todosColaboradores) {
         <div class="field"><label>Fecha de ingreso</label><input class="input" type="date" name="fecha_ingreso" value="${p.fecha_ingreso || ""}"></div>
         <div class="field"><label>Fecha de nacimiento</label><input class="input" type="date" name="fecha_nacimiento" value="${p.fecha_nacimiento || ""}"></div>
       </div>
-      <div class="field"><label>DPI</label><input class="input" name="dpi" value="${escapeHtml(p.dpi || "")}" placeholder="0000 00000 0000"></div>
+      <div class="row-2">
+        <div class="field"><label>DPI</label><input class="input" name="dpi" value="${escapeHtml(p.dpi || "")}" placeholder="0000 00000 0000"></div>
+        <div class="field"><label>No. afiliación IGSS</label><input class="input" name="igss" value="${escapeHtml(p.igss || "")}"></div>
+      </div>
       <div class="row-2">
         <div class="field"><label>Hora de entrada</label><input class="input" type="time" name="hora_entrada" value="${p.hora_entrada || ""}"></div>
         <div class="field"><label>Hora de salida</label><input class="input" type="time" name="hora_salida" value="${p.hora_salida || ""}"></div>
@@ -863,6 +866,7 @@ function openEditColaborador(p, comp, todosColaboradores) {
         area: f.get("area") || null,
         jefe_id: f.get("jefe_id") || null,
         dpi: f.get("dpi") || null,
+        igss: f.get("igss") || null,
         fecha_ingreso: f.get("fecha_ingreso") || null,
         fecha_nacimiento: f.get("fecha_nacimiento") || null,
         fecha_egreso: f.get("fecha_egreso") || null,

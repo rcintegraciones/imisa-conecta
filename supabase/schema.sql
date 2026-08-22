@@ -19,6 +19,7 @@ create table if not exists public.profiles (
   area text,
   telefono text,
   dpi text,
+  igss text, -- número de afiliación al IGSS
   foto_url text,
   fecha_nacimiento date,
   fecha_ingreso date,
@@ -38,6 +39,7 @@ alter table public.profiles add column if not exists hora_entrada time;
 alter table public.profiles add column if not exists hora_salida time;
 alter table public.profiles add column if not exists aplica_comisiones boolean not null default false;
 alter table public.profiles add column if not exists dpi text;
+alter table public.profiles add column if not exists igss text;
 
 -- Crea el perfil automáticamente cuando se crea el usuario en Auth,
 -- leyendo los datos desde "User Metadata".
