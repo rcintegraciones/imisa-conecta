@@ -531,9 +531,12 @@ function renderSetPassword() {
 async function renderInicio() {
   const root = renderShell(`<div class="empty-state">Cargando…</div>`, "#/inicio");
   try {
-    const comp = await api.getCompensacion(profile.id);
+    const [comp, roles] = await Promise.all([api.getCompensacion(profile.id), api.listDescripcionesRoles()]);
     const mensual = comp ? Number(comp.salario_mensual) + Number(comp.bonificacion_mensual || 0) : 0;
     const anual = mensual * 12 + Number(comp?.bono_anual || 0);
+    const miPuesto = profile.puesto
+      ? roles.find((r) => (r.puesto || "").trim().toLowerCase() === profile.puesto.trim().toLowerCase())
+      : null;
     root.innerHTML = `
       <div class="stat-grid">
         <div class="stat-tile"><div class="stat-value">${tiempoEnEmpresa(profile.fecha_ingreso)}</div><div class="stat-label">Tiempo en la empresa</div></div>
@@ -549,7 +552,23 @@ async function renderInicio() {
         <div class="list-row"><div class="list-row-main"><div class="list-row-title">Cumpleaños</div></div><div>${profile.fecha_nacimiento ? fmtDate(profile.fecha_nacimiento) : "—"}</div></div>
         <div class="list-row"><div class="list-row-main"><div class="list-row-title">Correo</div></div><div>${escapeHtml(profile.email)}</div></div>
       </div>
+      ${
+        miPuesto
+          ? `<div class="card">
+              <div class="card-title">Descriptor de mi puesto</div>
+              <p style="color:var(--text-dim);white-space:pre-wrap">${escapeHtml((miPuesto.descripcion || "").slice(0, 220))}${(miPuesto.descripcion || "").length > 220 ? "…" : ""}</p>
+              <div style="display:flex;gap:8px;margin-top:6px">
+                <button class="btn btn-ghost btn-sm" id="verMiPuestoBtn">Ver detalle completo</button>
+                <button class="btn btn-ghost btn-sm" id="imprimirMiPuestoBtn">Imprimir</button>
+              </div>
+            </div>`
+          : ""
+      }
     `;
+    if (miPuesto) {
+      document.getElementById("verMiPuestoBtn").addEventListener("click", () => verDetallePuesto(miPuesto));
+      document.getElementById("imprimirMiPuestoBtn").addEventListener("click", () => imprimirPuesto(miPuesto));
+    }
   } catch (err) {
     handleErr(err);
   }
@@ -1881,14 +1900,14 @@ async function renderRolesView() {
   if (isRrhh) document.getElementById("newRoleBtn").addEventListener("click", () => openRoleForm(null));
 }
 
-function verDetallePuesto(r) {
+function puestoDetalleContentHtml(r) {
   const d = r.detalle || {};
   const tabla = (rows, cols) =>
     rows && rows.length
       ? `<table style="width:100%;border-collapse:collapse;margin:6px 0 14px;font-size:13px">
-          <thead><tr>${cols.map((c) => `<th style="text-align:left;border-bottom:1px solid var(--border);padding:5px 6px;color:var(--text-mute)">${c.label}</th>`).join("")}</tr></thead>
+          <thead><tr>${cols.map((c) => `<th style="text-align:left;border-bottom:1px solid #999;padding:5px 6px;color:#555">${c.label}</th>`).join("")}</tr></thead>
           <tbody>${rows
-            .map((row) => `<tr>${cols.map((c) => `<td style="padding:5px 6px;border-bottom:1px solid var(--border-soft,var(--border))">${escapeHtml(row[c.key] ?? "")}</td>`).join("")}</tr>`)
+            .map((row) => `<tr>${cols.map((c) => `<td style="padding:5px 6px;border-bottom:1px solid #ddd">${escapeHtml(row[c.key] ?? "")}</td>`).join("")}</tr>`)
             .join("")}</tbody>
         </table>`
       : "";
@@ -1902,10 +1921,7 @@ function verDetallePuesto(r) {
   const perfil = d.perfil || {};
   const perfilRow = (label, val) => (val ? `<div><span class="label-sm">${escapeHtml(label)}</span><div>${escapeHtml(val)}</div></div>` : "");
 
-  const modal = openModal(
-    `${r.puesto}${r.codigo ? ` (${r.codigo})` : ""}`,
-    `
-    <div style="max-height:70vh;overflow:auto">
+  return `
       <p class="label-sm">${[r.empresa, r.area, r.departamento, r.lugar_trabajo].filter(Boolean).map(escapeHtml).join(" · ")}</p>
       <div class="row-2" style="margin:10px 0">
         <div><span class="label-sm">Jefe inmediato</span><div>${escapeHtml(r.jefe_inmediato || "—")}</div></div>
@@ -2003,9 +2019,43 @@ function verDetallePuesto(r) {
         ${d.fecha_elaboracion ? ` · Fecha: ${fmtDate(d.fecha_elaboracion)}` : ""}
         ${d.version ? ` · ${escapeHtml(d.version)}` : ""}
       </p>
+  `;
+}
+
+function imprimirPuesto(r) {
+  const letterhead = getLetterhead(r.empresa);
+  const { header, footer } = cartaHeaderFooterHtml(letterhead, r.empresa);
+  const html = `
+    <div class="print-area" style="max-width:800px;margin:0 auto;padding:40px;font-family:Arial,Helvetica,sans-serif;color:#111;background:#fff;font-size:13px">
+      ${header}
+      <h2 style="text-align:center;text-transform:uppercase;letter-spacing:.05em;font-size:16px">Perfil y Descriptor de Puesto</h2>
+      <h3 style="text-align:center;font-size:14px;margin-top:0">${escapeHtml(r.puesto)}${r.codigo ? ` (${escapeHtml(r.codigo)})` : ""}</h3>
+      ${puestoDetalleContentHtml(r)}
+      ${footer}
+    </div>
+  `;
+  const win = window.open("", "_blank");
+  if (!win) {
+    toast("El navegador bloqueó la ventana. Permite ventanas emergentes e intenta de nuevo.", true);
+    return;
+  }
+  win.document.write(`<!DOCTYPE html><html lang="es"><head><meta charset="utf-8"><title>Descriptor de puesto</title></head><body>${html}<script>window.onload=()=>window.print()<\/script></body></html>`);
+  win.document.close();
+}
+
+function verDetallePuesto(r) {
+  const modal = openModal(
+    `${r.puesto}${r.codigo ? ` (${r.codigo})` : ""}`,
+    `
+    <div style="display:flex;justify-content:flex-end;margin-bottom:10px">
+      <button class="btn btn-ghost btn-sm" id="imprimirPuestoBtn">Imprimir</button>
+    </div>
+    <div style="max-height:65vh;overflow:auto">
+      ${puestoDetalleContentHtml(r)}
     </div>
   `
   );
+  modal.querySelector("#imprimirPuestoBtn").addEventListener("click", () => imprimirPuesto(r));
   return modal;
 }
 
