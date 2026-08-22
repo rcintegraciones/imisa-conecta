@@ -174,6 +174,7 @@ const CENTENAS = ["", "ciento", "doscientos", "trescientos", "cuatrocientos", "q
 
 function numeroATextoEs(n) {
   n = Math.floor(n);
+  if (n < 0) return `menos ${numeroATextoEs(-n)}`;
   if (n === 0) return "cero";
   if (n === 100) return "cien";
 
@@ -644,7 +645,7 @@ async function renderPlanilla() {
         <div class="field" style="max-width:220px"><label>Mes</label><input class="input" type="month" id="periodoSelect" value="${currentPeriodo()}"></div>
         <div class="table-wrap">
           <table class="data">
-            <thead><tr><th>Nombre</th><th>Base</th><th>Incentivo</th><th>Bonificación</th><th>Horas extra</th><th>Comisiones</th><th>Total</th></tr></thead>
+            <thead><tr><th>Nombre</th><th>Base</th><th>Incentivo</th><th>Bonificación</th><th>Horas extra</th><th>Comisiones</th><th>Total</th><th></th></tr></thead>
             <tbody id="desgloseTableBody"></tbody>
           </table>
         </div>
@@ -700,16 +701,33 @@ async function drawDesgloseMensual(colaboradores, periodo) {
           <td>${fmtMoney(horasExtraMonto)}</td>
           <td>${p.aplica_comisiones ? fmtMoney(comisiones) : "—"}</td>
           <td>${fmtMoney(total)}</td>
+          <td><button type="button" class="btn btn-ghost btn-sm" data-recibo="${p.id}">Recibo</button></td>
         </tr>
       `;
     })
     .join("");
-  tbody.innerHTML = rows || `<tr><td colspan="7" class="empty-state">Sin colaboradores activos.</td></tr>`;
+  tbody.innerHTML = rows || `<tr><td colspan="8" class="empty-state">Sin colaboradores activos.</td></tr>`;
 
   tbody.querySelectorAll("[data-edit-mensual]").forEach((tr) => {
-    tr.addEventListener("click", () => {
+    tr.addEventListener("click", (e) => {
+      if (e.target.closest("[data-recibo]")) return;
       const p = activos.find((c) => c.id === tr.dataset.editMensual);
       openEditPlanillaMensual(p, planById[p.id], periodo, () => drawDesgloseMensual(colaboradores, periodo));
+    });
+  });
+
+  tbody.querySelectorAll("[data-recibo]").forEach((btn) => {
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const p = activos.find((c) => c.id === btn.dataset.recibo);
+      const plan = planById[p.id];
+      const comp = compById[p.id];
+      openReciboModal(p, periodo, {
+        salarioBase: Number(comp?.salario_mensual || 0),
+        bonificacion: plan ? Number(plan.bonificacion || 0) : Number(comp?.bonificacion_mensual || 0),
+        comisiones: p.aplica_comisiones ? Number(plan?.comisiones || 0) : 0,
+        horasExtraMonto: Number(cierreById[p.id]?.monto || 0),
+      });
     });
   });
 }
@@ -763,6 +781,17 @@ function openEditColaborador(p, comp, todosColaboradores) {
           </select>
         </div>
       </div>
+      <div class="field">
+        <label>Jefaturas adicionales (si tiene más de una)</label>
+        <div id="jefaturasAdicionalesList" class="field hint">Cargando…</div>
+        <div class="row-2">
+          <select class="select" id="nuevaJefaturaSelect">
+            <option value="">Selecciona a alguien más…</option>
+            ${posiblesJefes.map((c) => `<option value="${c.id}">${escapeHtml(c.full_name)}</option>`).join("")}
+          </select>
+          <button type="button" class="btn btn-ghost" id="agregarJefaturaBtn">+ Agregar</button>
+        </div>
+      </div>
       <div class="row-2">
         <div class="field"><label>Fecha de ingreso</label><input class="input" type="date" name="fecha_ingreso" value="${p.fecha_ingreso || ""}"></div>
         <div class="field"><label>Fecha de nacimiento</label><input class="input" type="date" name="fecha_nacimiento" value="${p.fecha_nacimiento || ""}"></div>
@@ -792,6 +821,37 @@ function openEditColaborador(p, comp, todosColaboradores) {
       <button class="btn btn-primary btn-block" type="submit">Guardar</button>
     </form>
   `);
+
+  const drawJefaturasAdicionales = async () => {
+    const host = modal.querySelector("#jefaturasAdicionalesList");
+    const lista = await api.listJefaturasAdicionales(p.id);
+    host.innerHTML = lista.length
+      ? lista.map((j) => `<div style="display:flex;align-items:center;justify-content:space-between;padding:4px 0">${escapeHtml(j.jefe?.full_name || "—")} <button type="button" class="btn btn-danger-outline btn-sm" data-quitar-jefatura="${j.id}">Quitar</button></div>`).join("")
+      : "Sin jefaturas adicionales.";
+    host.querySelectorAll("[data-quitar-jefatura]").forEach((btn) =>
+      btn.addEventListener("click", async () => {
+        try {
+          await api.quitarJefaturaAdicional(btn.dataset.quitarJefatura);
+          drawJefaturasAdicionales();
+        } catch (err) {
+          handleErr(err);
+        }
+      })
+    );
+  };
+  drawJefaturasAdicionales();
+
+  modal.querySelector("#agregarJefaturaBtn").addEventListener("click", async () => {
+    const select = modal.querySelector("#nuevaJefaturaSelect");
+    if (!select.value) return toast("Selecciona a alguien primero.", true);
+    try {
+      await api.agregarJefaturaAdicional(p.id, select.value, profile.id);
+      select.value = "";
+      drawJefaturasAdicionales();
+    } catch (err) {
+      handleErr(err);
+    }
+  });
 
   modal.querySelector("#editColabForm").addEventListener("submit", async (e) => {
     e.preventDefault();
@@ -1773,6 +1833,125 @@ async function renderRolesView() {
       btn.addEventListener("click", () => openRoleForm(roles.find((r) => r.id === btn.dataset.editRole)))
     );
   }
+}
+
+// ============================================================================
+// Recibo de pago (desde Planilla > Desglose mensual)
+// ============================================================================
+
+function reciboHtml(colaborador, periodo, datos) {
+  const letterhead = getLetterhead(colaborador.empresa);
+  const { header, footer } = cartaHeaderFooterHtml(letterhead, colaborador.empresa);
+  const empresaTexto = letterhead ? letterhead.razonSocial : colaborador.empresa || "Grupo IMISA";
+
+  const totalIngresos = datos.salarioBase + datos.horasExtraMonto + datos.comisiones + datos.vacaciones;
+  const totalDeducciones = datos.anticipo + datos.igss + datos.prestamos + datos.retencionIsr + datos.otros;
+  const liquido = totalIngresos + datos.bonificacion - totalDeducciones;
+
+  const fila = (desc, ingreso, otroIngreso, deduccion) => `
+    <tr>
+      <td style="padding:5px 6px">${escapeHtml(desc)}</td>
+      <td style="padding:5px 6px;text-align:right">${ingreso != null ? fmtMoney(ingreso) : ""}</td>
+      <td style="padding:5px 6px;text-align:right">${otroIngreso != null ? fmtMoney(otroIngreso) : ""}</td>
+      <td style="padding:5px 6px;text-align:right">${deduccion != null ? fmtMoney(deduccion) : ""}</td>
+    </tr>`;
+
+  return `
+    <div class="print-area" style="max-width:700px;margin:0 auto;padding:40px;font-family:Georgia,serif;color:#111;background:#fff;font-size:13.5px">
+      ${header}
+      <h2 style="text-align:center;text-transform:uppercase;letter-spacing:.05em;font-size:16px">Recibo de pago de planilla</h2>
+      <p style="text-align:right">Fecha: ${fmtDate(todayISO())}</p>
+      <p><strong>Recibí de:</strong> ${escapeHtml(empresaTexto)}</p>
+      <p><strong>La cantidad de:</strong> ${montoATextoEs(liquido)} (${fmtMoney(liquido)})</p>
+      <p><strong>Por concepto de:</strong> Pago de salario mes de ${fmtPeriodo(periodo)}. — ${datos.diasLaborados} días laborados</p>
+      <table style="width:100%;border-collapse:collapse;margin:16px 0">
+        <thead>
+          <tr style="border-bottom:1px solid #333">
+            <th style="text-align:left;padding:5px 6px">Descripción</th>
+            <th style="text-align:right;padding:5px 6px">Ingresos</th>
+            <th style="text-align:right;padding:5px 6px">Otros ingresos</th>
+            <th style="text-align:right;padding:5px 6px">Deducciones</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${fila("Sueldo ordinario por días laborados", datos.salarioBase)}
+          ${fila("Horas extras", datos.horasExtraMonto)}
+          ${fila("Comisiones", datos.comisiones)}
+          ${fila("Vacaciones", datos.vacaciones)}
+          ${fila("Bonificación Decreto 37/2001", null, datos.bonificacion)}
+          ${fila("Anticipo 1ra. quincena", null, null, datos.anticipo)}
+          ${fila("IGSS", null, null, datos.igss)}
+          ${fila("Préstamos o anticipos", null, null, datos.prestamos)}
+          ${fila("Retención ISR", null, null, datos.retencionIsr)}
+          ${fila("Otros", null, null, datos.otros)}
+        </tbody>
+        <tfoot>
+          <tr style="border-top:1px solid #333;font-weight:700">
+            <td style="padding:6px">Totales</td>
+            <td style="padding:6px;text-align:right">${fmtMoney(totalIngresos)}</td>
+            <td style="padding:6px;text-align:right">${fmtMoney(datos.bonificacion)}</td>
+            <td style="padding:6px;text-align:right">${fmtMoney(totalDeducciones)}</td>
+          </tr>
+        </tfoot>
+      </table>
+      <p style="text-align:right;font-weight:700;font-size:15px">LÍQUIDO A RECIBIR: ${fmtMoney(liquido)}</p>
+      <p style="margin-top:70px">(f) _____________________________<br>${escapeHtml(colaborador.full_name)}</p>
+      ${footer}
+    </div>
+  `;
+}
+
+function openReciboModal(colaborador, periodo, ingresosAuto) {
+  const modal = openModal(`Recibo — ${colaborador.full_name} (${fmtPeriodo(periodo)})`, `
+    <form id="reciboForm">
+      <div class="row-2">
+        <div class="field"><label>Días laborados</label><input class="input" type="number" step="1" min="0" max="31" name="dias_laborados" value="30"></div>
+        <div class="field"><label>Vacaciones (Q)</label><input class="input" type="number" step="0.01" min="0" name="vacaciones" value="0"></div>
+      </div>
+      <p class="field hint">Ingresos automáticos: salario base ${fmtMoney(ingresosAuto.salarioBase)}, horas extra ${fmtMoney(ingresosAuto.horasExtraMonto)}, comisiones ${fmtMoney(ingresosAuto.comisiones)}, bonificación ${fmtMoney(ingresosAuto.bonificacion)}.</p>
+      <div class="card-title" style="font-size:13px;margin-top:6px">Deducciones (completa lo que aplique)</div>
+      <div class="row-2">
+        <div class="field"><label>Anticipo 1ra. quincena</label><input class="input" type="number" step="0.01" min="0" name="anticipo" value="0"></div>
+        <div class="field"><label>IGSS</label><input class="input" type="number" step="0.01" min="0" name="igss" value="0"></div>
+      </div>
+      <div class="row-2">
+        <div class="field"><label>Préstamos o anticipos</label><input class="input" type="number" step="0.01" min="0" name="prestamos" value="0"></div>
+        <div class="field"><label>Retención ISR</label><input class="input" type="number" step="0.01" min="0" name="retencion_isr" value="0"></div>
+      </div>
+      <div class="field"><label>Otros</label><input class="input" type="number" step="0.01" min="0" name="otros" value="0"></div>
+      <button class="btn btn-primary btn-block" type="submit">Generar e imprimir</button>
+    </form>
+  `);
+
+  modal.querySelector("#reciboForm").addEventListener("submit", (e) => {
+    e.preventDefault();
+    const f = new FormData(e.target);
+    const datos = {
+      ...ingresosAuto,
+      diasLaborados: Number(f.get("dias_laborados") || 0),
+      vacaciones: Number(f.get("vacaciones") || 0),
+      anticipo: Number(f.get("anticipo") || 0),
+      igss: Number(f.get("igss") || 0),
+      prestamos: Number(f.get("prestamos") || 0),
+      retencionIsr: Number(f.get("retencion_isr") || 0),
+      otros: Number(f.get("otros") || 0),
+    };
+    const totalIngresos = datos.salarioBase + datos.horasExtraMonto + datos.comisiones + datos.vacaciones + datos.bonificacion;
+    const totalDeducciones = datos.anticipo + datos.igss + datos.prestamos + datos.retencionIsr + datos.otros;
+    if (totalDeducciones > totalIngresos) {
+      return toast("Las deducciones superan los ingresos — revisa los montos antes de generar el recibo.", true);
+    }
+
+    const win = window.open("", "_blank");
+    if (!win) {
+      toast("El navegador bloqueó la ventana. Permite ventanas emergentes e intenta de nuevo.", true);
+      return;
+    }
+    const html = reciboHtml(colaborador, periodo, datos);
+    win.document.write(`<!DOCTYPE html><html lang="es"><head><meta charset="utf-8"><title>Recibo</title></head><body>${html}<script>window.onload=()=>window.print()<\/script></body></html>`);
+    win.document.close();
+    modal.remove();
+  });
 }
 
 // ============================================================================

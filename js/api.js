@@ -457,9 +457,43 @@ export async function listEvaluacionesAdmin({ periodo, colaboradorId } = {}) {
 
 // Subordinados directos de un jefe (según el organigrama en profiles.jefe_id).
 export async function listSubordinados(jefeId) {
-  const { data, error } = await supabase.from("profiles").select("*").eq("jefe_id", jefeId).order("full_name");
+  const [{ data: directos, error: e1 }, { data: adicionalesRows, error: e2 }] = await Promise.all([
+    supabase.from("profiles").select("*").eq("jefe_id", jefeId).order("full_name"),
+    supabase.from("jefaturas_adicionales").select("colaborador:profiles!jefaturas_adicionales_colaborador_id_fkey(*)").eq("jefe_id", jefeId),
+  ]);
+  if (e1) throw e1;
+  if (e2) throw e2;
+  const adicionales = (adicionalesRows || []).map((r) => r.colaborador).filter(Boolean);
+  const porId = new Map([...directos, ...adicionales].map((p) => [p.id, p]));
+  return [...porId.values()].sort((a, b) => a.full_name.localeCompare(b.full_name));
+}
+
+// ---------------------------------------------------------------------------
+// Jefaturas adicionales (cuando alguien tiene más de una jefatura directa)
+// ---------------------------------------------------------------------------
+
+export async function listJefaturasAdicionales(colaboradorId) {
+  const { data, error } = await supabase
+    .from("jefaturas_adicionales")
+    .select("*, jefe:profiles!jefaturas_adicionales_jefe_id_fkey(full_name)")
+    .eq("colaborador_id", colaboradorId);
   if (error) throw error;
   return data;
+}
+
+export async function agregarJefaturaAdicional(colaboradorId, jefeId, userId) {
+  const { data, error } = await supabase
+    .from("jefaturas_adicionales")
+    .insert({ colaborador_id: colaboradorId, jefe_id: jefeId, creado_por: userId })
+    .select()
+    .single();
+  if (error) throw error;
+  return data;
+}
+
+export async function quitarJefaturaAdicional(id) {
+  const { error } = await supabase.from("jefaturas_adicionales").delete().eq("id", id);
+  if (error) throw error;
 }
 
 export async function crearEvaluacion(colaboradorId, { periodo, resultado, punteo, monto, comentarios }, userId) {

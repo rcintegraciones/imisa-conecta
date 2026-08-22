@@ -74,8 +74,21 @@ as $$
   select role from public.profiles where id = auth.uid();
 $$;
 
--- true si el usuario actual es la jefatura directa del colaborador dado
--- (según profiles.jefe_id, que se llena a partir del organigrama).
+-- Jefaturas adicionales: para cuando un colaborador tiene más de una
+-- jefatura directa a la vez (ej. dos supervisores sobre el mismo equipo).
+-- profiles.jefe_id sigue siendo la jefatura "principal" (para mostrar en
+-- Planilla); esta tabla suma jefaturas extra con los mismos permisos.
+create table if not exists public.jefaturas_adicionales (
+  id uuid primary key default gen_random_uuid(),
+  colaborador_id uuid not null references public.profiles(id) on delete cascade,
+  jefe_id uuid not null references public.profiles(id) on delete cascade,
+  creado_por uuid references public.profiles(id),
+  created_at timestamptz not null default now(),
+  unique (colaborador_id, jefe_id)
+);
+
+-- true si el usuario actual es alguna de las jefaturas del colaborador dado
+-- (la principal en profiles.jefe_id, o una adicional en jefaturas_adicionales).
 create or replace function public.es_jefe_de(p_colaborador_id uuid)
 returns boolean
 language sql stable security definer set search_path = public
@@ -83,6 +96,9 @@ as $$
   select exists (
     select 1 from public.profiles
     where id = p_colaborador_id and jefe_id = auth.uid()
+  ) or exists (
+    select 1 from public.jefaturas_adicionales
+    where colaborador_id = p_colaborador_id and jefe_id = auth.uid()
   );
 $$;
 
@@ -303,6 +319,7 @@ alter table public.horas_extra enable row level security;
 alter table public.cierres_horas_extra enable row level security;
 alter table public.evaluaciones_desempeno enable row level security;
 alter table public.planilla_mensual enable row level security;
+alter table public.jefaturas_adicionales enable row level security;
 alter table public.actividades enable row level security;
 alter table public.descripciones_roles enable row level security;
 
@@ -448,6 +465,18 @@ create policy planilla_mensual_select on public.planilla_mensual
 
 drop policy if exists planilla_mensual_write_rrhh on public.planilla_mensual;
 create policy planilla_mensual_write_rrhh on public.planilla_mensual
+  for all to authenticated using (public.current_role() = 'rrhh') with check (public.current_role() = 'rrhh');
+
+-- jefaturas adicionales: el colaborador y sus jefes (principal o adicionales)
+-- pueden verlas; solo RRHH las asigna/quita (desde Planilla).
+drop policy if exists jefaturas_adicionales_select on public.jefaturas_adicionales;
+create policy jefaturas_adicionales_select on public.jefaturas_adicionales
+  for select to authenticated using (
+    colaborador_id = auth.uid() or jefe_id = auth.uid() or public.current_role() = 'rrhh'
+  );
+
+drop policy if exists jefaturas_adicionales_write_rrhh on public.jefaturas_adicionales;
+create policy jefaturas_adicionales_write_rrhh on public.jefaturas_adicionales
   for all to authenticated using (public.current_role() = 'rrhh') with check (public.current_role() = 'rrhh');
 
 -- actividades: todos ven; solo RRHH crea/edita/borra.
