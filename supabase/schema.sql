@@ -20,6 +20,7 @@ create table if not exists public.profiles (
   telefono text,
   dpi text,
   igss text, -- número de afiliación al IGSS
+  jubilado boolean not null default false, -- pensionado que sigue laborando: aporta 3% IVS en vez de 4.83%
   foto_url text,
   fecha_nacimiento date,
   fecha_ingreso date,
@@ -40,6 +41,10 @@ alter table public.profiles add column if not exists hora_salida time;
 alter table public.profiles add column if not exists aplica_comisiones boolean not null default false;
 alter table public.profiles add column if not exists dpi text;
 alter table public.profiles add column if not exists igss text;
+-- Colaboradores jubilados que continúan laborando: solo aportan 3% IVS al
+-- IGSS en vez del 4.83% del régimen general. Se marca una vez y el recibo
+-- de pago calcula la deducción automáticamente con la tasa correcta.
+alter table public.profiles add column if not exists jubilado boolean not null default false;
 
 -- Crea el perfil automáticamente cuando se crea el usuario en Auth,
 -- leyendo los datos desde "User Metadata".

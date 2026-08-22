@@ -741,11 +741,13 @@ async function drawDesgloseMensual(colaboradores, periodo) {
       const p = activos.find((c) => c.id === btn.dataset.recibo);
       const plan = planById[p.id];
       const comp = compById[p.id];
+      const salarioBaseRecibo = Number(comp?.salario_mensual || 0);
       openReciboModal(p, periodo, {
-        salarioBase: Number(comp?.salario_mensual || 0),
+        salarioBase: salarioBaseRecibo,
         bonificacion: plan ? Number(plan.bonificacion || 0) : Number(comp?.bonificacion_mensual || 0),
         comisiones: p.aplica_comisiones ? Number(plan?.comisiones || 0) : 0,
         horasExtraMonto: Number(cierreById[p.id]?.monto || 0),
+        igssCalculado: calcularIgss(salarioBaseRecibo, p.jubilado),
       });
     });
   });
@@ -819,6 +821,9 @@ function openEditColaborador(p, comp, todosColaboradores) {
         <div class="field"><label>DPI</label><input class="input" name="dpi" value="${escapeHtml(p.dpi || "")}" placeholder="0000 00000 0000"></div>
         <div class="field"><label>No. afiliación IGSS</label><input class="input" name="igss" value="${escapeHtml(p.igss || "")}"></div>
       </div>
+      <label style="display:flex;align-items:center;gap:8px;margin-bottom:16px;font-size:13px;color:var(--text-dim)">
+        <input type="checkbox" name="jubilado" ${p.jubilado ? "checked" : ""}> Jubilado que continúa laborando (aporta 3% IVS al IGSS en vez de 4.83%)
+      </label>
       <div class="row-2">
         <div class="field"><label>Hora de entrada</label><input class="input" type="time" name="hora_entrada" value="${p.hora_entrada || ""}"></div>
         <div class="field"><label>Hora de salida</label><input class="input" type="time" name="hora_salida" value="${p.hora_salida || ""}"></div>
@@ -892,6 +897,7 @@ function openEditColaborador(p, comp, todosColaboradores) {
         hora_entrada: f.get("hora_entrada") || null,
         hora_salida: f.get("hora_salida") || null,
         aplica_comisiones: f.get("aplica_comisiones") === "on",
+        jubilado: f.get("jubilado") === "on",
         activo: f.get("activo") === "true",
       });
       await api.setCompensacion(
@@ -2125,7 +2131,16 @@ function reciboHtml(colaborador, periodo, datos) {
   `;
 }
 
+const IGSS_TASA_NORMAL = 0.0483;
+const IGSS_TASA_JUBILADO = 0.03;
+
+function calcularIgss(salarioBase, jubilado) {
+  const tasa = jubilado ? IGSS_TASA_JUBILADO : IGSS_TASA_NORMAL;
+  return Math.round(salarioBase * tasa * 100) / 100;
+}
+
 function openReciboModal(colaborador, periodo, ingresosAuto) {
+  const tasaTexto = colaborador.jubilado ? "3% IVS (jubilado)" : "4.83%";
   const modal = openModal(`Recibo — ${colaborador.full_name} (${fmtPeriodo(periodo)})`, `
     <form id="reciboForm">
       <div class="row-2">
@@ -2136,7 +2151,10 @@ function openReciboModal(colaborador, periodo, ingresosAuto) {
       <div class="card-title" style="font-size:13px;margin-top:6px">Deducciones (completa lo que aplique)</div>
       <div class="row-2">
         <div class="field"><label>Anticipo 1ra. quincena</label><input class="input" type="number" step="0.01" min="0" name="anticipo" value="0"></div>
-        <div class="field"><label>IGSS</label><input class="input" type="number" step="0.01" min="0" name="igss" value="0"></div>
+        <div class="field">
+          <label>IGSS (${tasaTexto} sobre salario base)</label>
+          <input class="input" type="number" step="0.01" min="0" name="igss" value="${ingresosAuto.igssCalculado}">
+        </div>
       </div>
       <div class="row-2">
         <div class="field"><label>Préstamos o anticipos</label><input class="input" type="number" step="0.01" min="0" name="prestamos" value="0"></div>
