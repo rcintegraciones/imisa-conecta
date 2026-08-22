@@ -354,10 +354,10 @@ export async function listHorasExtraBiometrico(periodo) {
   return data;
 }
 
-export async function registrarHorasExtra(colaboradorId, { fecha, hora_salida_real, horas, motivo }, userId) {
+export async function registrarHorasExtra(colaboradorId, { fecha, hora_salida_real, horas, tipo, motivo }, userId) {
   const { data, error } = await supabase
     .from("horas_extra")
-    .insert({ colaborador_id: colaboradorId, fecha, hora_salida_real: hora_salida_real || null, horas, motivo, creado_por: userId })
+    .insert({ colaborador_id: colaboradorId, fecha, hora_salida_real: hora_salida_real || null, horas, tipo: tipo || "simple", motivo, creado_por: userId })
     .select()
     .single();
   if (error) throw error;
@@ -397,14 +397,26 @@ export async function congelarHorasExtra(colaboradorId, periodo, userId) {
     listHorasExtraPorPeriodo(colaboradorId, periodo),
     getCompensacion(colaboradorId),
   ]);
-  const totalHoras = horasDelMes.filter((h) => h.estado === "validado").reduce((s, h) => s + Number(h.horas), 0);
+  const validadas = horasDelMes.filter((h) => h.estado === "validado");
+  const totalSimples = validadas.filter((h) => h.tipo !== "doble").reduce((s, h) => s + Number(h.horas), 0);
+  const totalDobles = validadas.filter((h) => h.tipo === "doble").reduce((s, h) => s + Number(h.horas), 0);
   const salarioMensual = Number(comp?.salario_mensual || 0);
-  const monto = (salarioMensual / 30 / 8) * 1.5 * totalHoras;
+  const horaBase = salarioMensual / 30 / 8;
+  const monto = horaBase * 1.5 * totalSimples + horaBase * 2 * totalDobles;
 
   const { data, error } = await supabase
     .from("cierres_horas_extra")
     .upsert(
-      { colaborador_id: colaboradorId, periodo, total_horas: totalHoras, salario_usado: salarioMensual, monto, creado_por: userId },
+      {
+        colaborador_id: colaboradorId,
+        periodo,
+        total_horas: totalSimples + totalDobles,
+        total_horas_simples: totalSimples,
+        total_horas_dobles: totalDobles,
+        salario_usado: salarioMensual,
+        monto,
+        creado_por: userId,
+      },
       { onConflict: "colaborador_id,periodo" }
     )
     .select()

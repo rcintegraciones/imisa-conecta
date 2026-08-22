@@ -192,6 +192,7 @@ create table if not exists public.horas_extra (
   fecha date not null,
   hora_salida_real time,
   horas numeric(6,2) not null,
+  tipo text not null default 'simple' check (tipo in ('simple','doble')), -- doble: día de descanso/feriado trabajado
   motivo text,
   origen text not null default 'manual' check (origen in ('manual','biometrico')),
   estado text not null default 'pendiente' check (estado in ('pendiente','validado')),
@@ -202,6 +203,7 @@ create table if not exists public.horas_extra (
 );
 
 alter table public.horas_extra add column if not exists hora_salida_real time;
+alter table public.horas_extra add column if not exists tipo text not null default 'simple' check (tipo in ('simple','doble'));
 alter table public.horas_extra add column if not exists estado text not null default 'pendiente' check (estado in ('pendiente','validado'));
 alter table public.horas_extra add column if not exists validado_por uuid references public.profiles(id);
 alter table public.horas_extra add column if not exists validado_at timestamptz;
@@ -214,13 +216,18 @@ create table if not exists public.cierres_horas_extra (
   id uuid primary key default gen_random_uuid(),
   colaborador_id uuid not null references public.profiles(id) on delete cascade,
   periodo text not null, -- 'YYYY-MM'
-  total_horas numeric(6,2) not null,
+  total_horas numeric(6,2) not null, -- simples + dobles, para mostrar de un vistazo
+  total_horas_simples numeric(6,2) not null default 0,
+  total_horas_dobles numeric(6,2) not null default 0,
   salario_usado numeric(12,2) not null,
   monto numeric(12,2) not null,
   creado_por uuid references public.profiles(id),
   created_at timestamptz not null default now(),
   unique (colaborador_id, periodo)
 );
+
+alter table public.cierres_horas_extra add column if not exists total_horas_simples numeric(6,2) not null default 0;
+alter table public.cierres_horas_extra add column if not exists total_horas_dobles numeric(6,2) not null default 0;
 
 -- ----------------------------------------------------------------------------
 -- EVALUACIONES DE DESEMPEÑO

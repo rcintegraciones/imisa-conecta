@@ -1217,13 +1217,25 @@ function formHorasExtraHtml(colaborador) {
     <form id="heForm" style="margin-bottom:14px">
       <div class="row-2">
         <div class="field"><label>Fecha</label><input class="input" type="date" name="fecha" value="${todayISO()}" required></div>
+        <div class="field"><label>Tipo</label>
+          <select class="select" name="tipo" id="heTipo">
+            <option value="simple">Simple (1.5x — se quedó tarde)</option>
+            <option value="doble">Doble (2x — día de descanso/feriado trabajado)</option>
+          </select>
+        </div>
+      </div>
+      <div id="heCampoSimple" class="row-2">
         ${
           tieneHorario
-            ? `<div class="field"><label>Hora de salida real</label><input class="input" type="time" name="hora_salida_real" required></div>`
-            : `<div class="field"><label>Horas extra</label><input class="input" type="number" step="0.25" min="0" name="horas_manual" required></div>`
+            ? `<div class="field"><label>Hora de salida real</label><input class="input" type="time" name="hora_salida_real"></div>
+               <div class="field hint" id="heCalcPreview" style="align-self:end">Salida programada: ${colaborador.hora_salida}. 0–24 min tarde no cuenta, 25–45 min = 0.5h, 45+ min = 1h.</div>`
+            : `<div class="field"><label>Horas extra</label><input class="input" type="number" step="0.25" min="0" name="horas_manual"></div>`
         }
       </div>
-      ${tieneHorario ? `<div class="field hint" id="heCalcPreview">Su hora de salida programada es ${colaborador.hora_salida}. 0–24 min tarde no cuenta, 25–45 min = 0.5h, 45+ min = 1h.</div>` : ""}
+      <div id="heCampoDoble" class="field" style="display:none">
+        <label>Horas trabajadas ese día</label>
+        <input class="input" type="number" step="0.25" min="0" name="horas_dobles">
+      </div>
       <div class="field"><label>Motivo (opcional)</label><input class="input" name="motivo"></div>
       <button class="btn btn-primary btn-block" type="submit">Registrar</button>
     </form>
@@ -1233,26 +1245,38 @@ function formHorasExtraHtml(colaborador) {
 function attachHorasExtraForm(host, colaborador, onRegistered) {
   const form = host.querySelector("#heForm");
   if (!form) return;
-  if (colaborador.hora_salida) {
+
+  form.tipo.addEventListener("change", () => {
+    const esDoble = form.tipo.value === "doble";
+    document.getElementById("heCampoSimple").style.display = esDoble ? "none" : "grid";
+    document.getElementById("heCampoDoble").style.display = esDoble ? "block" : "none";
+  });
+
+  if (colaborador.hora_salida && form.hora_salida_real) {
     form.hora_salida_real.addEventListener("change", () => {
       const horas = calcularHorasExtra(colaborador.hora_salida, form.hora_salida_real.value);
       document.getElementById("heCalcPreview").textContent = `Horas extra calculadas: ${horas}h (salida programada ${colaborador.hora_salida}).`;
     });
   }
+
   form.addEventListener("submit", async (e) => {
     e.preventDefault();
     const f = new FormData(form);
-    const horas = colaborador.hora_salida
-      ? calcularHorasExtra(colaborador.hora_salida, f.get("hora_salida_real"))
-      : Number(f.get("horas_manual"));
+    const tipo = f.get("tipo");
+    const horas =
+      tipo === "doble"
+        ? Number(f.get("horas_dobles"))
+        : colaborador.hora_salida
+        ? calcularHorasExtra(colaborador.hora_salida, f.get("hora_salida_real"))
+        : Number(f.get("horas_manual"));
     if (!horas || horas <= 0) return toast("No hay horas extra que registrar con esos datos.", true);
     try {
       await api.registrarHorasExtra(
         colaborador.id,
-        { fecha: f.get("fecha"), hora_salida_real: f.get("hora_salida_real") || null, horas, motivo: f.get("motivo") || null },
+        { fecha: f.get("fecha"), hora_salida_real: tipo === "doble" ? null : f.get("hora_salida_real") || null, horas, tipo, motivo: f.get("motivo") || null },
         profile.id
       );
-      toast(`Registradas ${horas}h (quedan pendientes de validación).`);
+      toast(`Registradas ${horas}h ${tipo === "doble" ? "dobles" : "simples"} (quedan pendientes de validación).`);
       onRegistered();
     } catch (err) {
       handleErr(err);
@@ -1260,7 +1284,7 @@ function attachHorasExtraForm(host, colaborador, onRegistered) {
   });
 }
 
-async function renderMisHorasExtra(host, colaborador) {
+async function renderMisHorasExtra(host, colaborador, onRegistered) {
   const periodo = currentPeriodo();
   host.innerHTML = `<div class="empty-state">Cargando…</div>`;
   const registros = await api.listHorasExtraPorPeriodo(colaborador.id, periodo);
@@ -1276,13 +1300,16 @@ async function renderMisHorasExtra(host, colaborador) {
       registros.length
         ? registros
             .map(
-              (r) => `<div class="list-row"><div class="list-row-main"><div class="list-row-title">${fmtDate(r.fecha)} — ${r.horas}h</div><div class="list-row-sub">${escapeHtml(r.motivo || "")}</div></div>${pillEstado(r.estado)}</div>`
+              (r) => `<div class="list-row"><div class="list-row-main"><div class="list-row-title">${fmtDate(r.fecha)} — ${r.horas}h ${r.tipo === "doble" ? "(doble)" : ""}</div><div class="list-row-sub">${escapeHtml(r.motivo || "")}</div></div>${pillEstado(r.estado)}</div>`
             )
             .join("")
         : `<div class="empty-state">Sin registros en ${fmtPeriodo(periodo)}.</div>`
     }
   `;
-  attachHorasExtraForm(host, colaborador, () => renderMisHorasExtra(host, colaborador));
+  attachHorasExtraForm(host, colaborador, () => {
+    renderMisHorasExtra(host, colaborador, onRegistered);
+    if (onRegistered) onRegistered();
+  });
 }
 
 async function renderEquipoHorasExtra(host) {
@@ -1295,7 +1322,7 @@ async function renderEquipoHorasExtra(host) {
             .map(
               (r) => `
         <div class="list-row">
-          <div class="list-row-main"><div class="list-row-title">${escapeHtml(r.colaborador?.full_name || "—")} — ${fmtDate(r.fecha)}</div><div class="list-row-sub">${r.horas}h · ${escapeHtml(r.motivo || "")}</div></div>
+          <div class="list-row-main"><div class="list-row-title">${escapeHtml(r.colaborador?.full_name || "—")} — ${fmtDate(r.fecha)}</div><div class="list-row-sub">${r.horas}h ${r.tipo === "doble" ? "(doble)" : ""} · ${escapeHtml(r.motivo || "")}</div></div>
           <button class="btn btn-green btn-sm" data-validar="${r.id}">Validar</button>
         </div>`
             )
@@ -1368,7 +1395,7 @@ async function renderHorasExtra() {
       return;
     }
     const colaborador = colaboradores.find((c) => c.id === e.target.value);
-    await renderMisHorasExtra(host, colaborador);
+    await renderMisHorasExtra(host, colaborador, () => renderEquipoHorasExtra(document.getElementById("pendientesHost")));
   });
 
   const drawCongelar = async () => {
@@ -1384,10 +1411,13 @@ async function renderHorasExtra() {
       api.listHorasExtraPorPeriodo(colabId, periodo),
       api.getCierreHorasExtra(colabId, periodo),
     ]);
-    const validadas = registros.filter((r) => r.estado === "validado").reduce((s, r) => s + Number(r.horas), 0);
+    const validadas = registros.filter((r) => r.estado === "validado");
+    const simples = validadas.filter((r) => r.tipo !== "doble").reduce((s, r) => s + Number(r.horas), 0);
+    const dobles = validadas.filter((r) => r.tipo === "doble").reduce((s, r) => s + Number(r.horas), 0);
     host.innerHTML = `
       <div class="stat-grid">
-        <div class="stat-tile"><div class="stat-value">${validadas}</div><div class="stat-label">Horas validadas del mes</div></div>
+        <div class="stat-tile"><div class="stat-value">${simples}</div><div class="stat-label">Horas simples validadas</div></div>
+        <div class="stat-tile"><div class="stat-value">${dobles}</div><div class="stat-label">Horas dobles validadas</div></div>
         ${cierre ? `<div class="stat-tile"><div class="stat-value">${fmtMoney(cierre.monto)}</div><div class="stat-label">Ya congelado</div></div>` : ""}
       </div>
       <button class="btn btn-primary" id="congelarBtn">${cierre ? "Recalcular y congelar de nuevo" : "Congelar y calcular monto"}</button>
@@ -1412,9 +1442,9 @@ async function renderHorasExtra() {
     const registros = await api.listHorasExtraBiometrico(periodo);
     host.innerHTML = registros.length
       ? `<div class="table-wrap"><table class="data">
-          <thead><tr><th>Colaborador</th><th>Fecha</th><th>Hora salida</th><th>Horas extra</th></tr></thead>
+          <thead><tr><th>Colaborador</th><th>Fecha</th><th>Hora salida</th><th>Tipo</th><th>Horas extra</th></tr></thead>
           <tbody>${registros
-            .map((r) => `<tr><td>${escapeHtml(r.colaborador?.full_name || "—")}</td><td>${fmtDate(r.fecha)}</td><td>${r.hora_salida_real || "—"}</td><td>${r.horas}h</td></tr>`)
+            .map((r) => `<tr><td>${escapeHtml(r.colaborador?.full_name || "—")}</td><td>${fmtDate(r.fecha)}</td><td>${r.hora_salida_real || "—"}</td><td>${r.tipo === "doble" ? "Doble" : "Simple"}</td><td>${r.horas}h</td></tr>`)
             .join("")}</tbody>
         </table></div>`
       : `<div class="empty-state">Sin registros biométricos en ${fmtPeriodo(periodo)}. (Se llenan automáticamente desde n8n.)</div>`;
