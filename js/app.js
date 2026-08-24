@@ -594,9 +594,9 @@ function drawPlanillaTable(root, colaboradores, compById, empresaFiltro) {
       }
       return `
         <tr data-edit="${p.id}" style="cursor:pointer">
-          <td>${escapeHtml(p.full_name)}</td>
+          <td class="wrap">${escapeHtml(p.full_name)}</td>
           <td>${escapeHtml(p.empresa || "—")}</td>
-          <td>${escapeHtml(p.puesto || "—")}</td>
+          <td class="wrap">${escapeHtml(p.puesto || "—")}</td>
           <td>${fmtDate(p.fecha_ingreso)}</td>
           <td>${tiempoEnEmpresa(p.fecha_ingreso, p.fecha_egreso)}</td>
           <td>${fmtMoney(mensual, c?.moneda)}</td>

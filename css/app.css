@@ -80,7 +80,7 @@ a { color: inherit; }
 .tab.active { color: var(--accent); background: rgba(245,127,4,.12); border-color: rgba(245,127,4,.4); }
 .tab:not(.active):hover { color: var(--text); background: rgba(0,0,0,.05); }
 
-main.view { flex: 1; width: 100%; max-width: 980px; margin: 0 auto; padding: 18px 16px 90px; }
+main.view { flex: 1; width: 100%; max-width: 1320px; margin: 0 auto; padding: 18px 16px 90px; }
 
 /* ---------- buttons ---------- */
 .btn {
@@ -159,6 +159,7 @@ table.data th {
 }
 table.data td { padding: 10px 10px; border-bottom: 1px solid var(--border); white-space: nowrap; }
 table.data tr:last-child td { border-bottom: none; }
+table.data td.wrap { white-space: normal; min-width: 140px; }
 
 .empty-state { text-align: center; padding: 40px 16px; color: var(--text-faint); }
 
