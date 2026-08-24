@@ -1131,15 +1131,19 @@ function categoriaOptions() {
     .join("");
 }
 
-async function renderDrivePara(colaboradorId, host) {
+async function renderDrivePara(colaboradorId, host, isRrhh) {
   host.innerHTML = `<div class="empty-state">Cargando…</div>`;
   const docs = await api.listDocumentos(colaboradorId);
   host.innerHTML = `
-    <form id="uploadForm" class="row-2" style="align-items:end;margin-bottom:14px">
-      <div class="field"><label>Categoría</label><select class="select" name="categoria">${categoriaOptions()}</select></div>
-      <div class="field"><label>Archivo</label><input class="input" type="file" name="file" required></div>
-      <button class="btn btn-primary" style="grid-column:1/-1" type="submit">Subir documento</button>
-    </form>
+    ${
+      isRrhh
+        ? `<form id="uploadForm" class="row-2" style="align-items:end;margin-bottom:14px">
+            <div class="field"><label>Categoría</label><select class="select" name="categoria">${categoriaOptions()}</select></div>
+            <div class="field"><label>Archivo</label><input class="input" type="file" name="file" required></div>
+            <button class="btn btn-primary" style="grid-column:1/-1" type="submit">Subir documento</button>
+          </form>`
+        : ""
+    }
     ${
       docs.length
         ? docs
@@ -1149,7 +1153,7 @@ async function renderDrivePara(colaboradorId, host) {
           <div class="list-row-main"><div class="list-row-title">${escapeHtml(d.nombre)}</div><div class="list-row-sub">${escapeHtml(d.categoria)} · ${fmtDate(d.created_at)}</div></div>
           <div style="display:flex;gap:6px">
             <button class="btn btn-ghost btn-sm" data-view="${d.storage_path}">Ver</button>
-            ${profile.role === "rrhh" ? `<button class="btn btn-danger-outline btn-sm" data-del="${d.id}" data-path="${d.storage_path}">Eliminar</button>` : ""}
+            ${isRrhh ? `<button class="btn btn-danger-outline btn-sm" data-del="${d.id}" data-path="${d.storage_path}">Eliminar</button>` : ""}
           </div>
         </div>`
             )
@@ -1158,19 +1162,21 @@ async function renderDrivePara(colaboradorId, host) {
     }
   `;
 
-  host.querySelector("#uploadForm").addEventListener("submit", async (e) => {
-    e.preventDefault();
-    const f = new FormData(e.target);
-    const file = f.get("file");
-    if (!file || !file.size) return toast("Selecciona un archivo.", true);
-    try {
-      await api.subirDocumento(colaboradorId, file, f.get("categoria"), profile.id);
-      toast("Documento subido.");
-      renderDrivePara(colaboradorId, host);
-    } catch (err) {
-      handleErr(err);
-    }
-  });
+  if (isRrhh) {
+    host.querySelector("#uploadForm").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const f = new FormData(e.target);
+      const file = f.get("file");
+      if (!file || !file.size) return toast("Selecciona un archivo.", true);
+      try {
+        await api.subirDocumento(colaboradorId, file, f.get("categoria"), profile.id);
+        toast("Documento subido.");
+        renderDrivePara(colaboradorId, host, isRrhh);
+      } catch (err) {
+        handleErr(err);
+      }
+    });
+  }
 
   host.querySelectorAll("[data-view]").forEach((btn) =>
     btn.addEventListener("click", async () => {
@@ -1188,7 +1194,7 @@ async function renderDrivePara(colaboradorId, host) {
       try {
         await api.eliminarDocumento(btn.dataset.del, btn.dataset.path);
         toast("Documento eliminado.");
-        renderDrivePara(colaboradorId, host);
+        renderDrivePara(colaboradorId, host, isRrhh);
       } catch (err) {
         handleErr(err);
       }
@@ -1219,7 +1225,7 @@ async function renderDocumentos() {
         <div id="reqListHost"></div>
       </div>
     `;
-    await renderDrivePara(profile.id, document.getElementById("driveHost"));
+    await renderDrivePara(profile.id, document.getElementById("driveHost"), false);
     const renderReqList = async () => {
       const reqs = await api.listSolicitudesDocumentos({ colaboradorId: profile.id });
       document.getElementById("reqListHost").innerHTML = reqs.length
@@ -1291,7 +1297,7 @@ async function renderDocumentos() {
         host.innerHTML = "";
         return;
       }
-      await renderDrivePara(id, host);
+      await renderDrivePara(id, host, true);
     });
   }
 }
@@ -1306,26 +1312,18 @@ function formHorasExtraHtml(colaborador) {
     <form id="heForm" style="margin-bottom:14px">
       <div class="row-2">
         <div class="field"><label>Fecha</label><input class="input" type="date" name="fecha" value="${todayISO()}" required></div>
-        <div class="field"><label>Tipo</label>
-          <select class="select" name="tipo" id="heTipo">
-            <option value="simple">Simple (1.5x — se quedó tarde)</option>
-            <option value="doble">Doble (2x — día de descanso/feriado trabajado)</option>
-          </select>
-        </div>
-      </div>
-      <div id="heCampoSimple" class="row-2">
         ${
           tieneHorario
-            ? `<div class="field"><label>Hora de salida real</label><input class="input" type="time" name="hora_salida_real"></div>
-               <div class="field hint" id="heCalcPreview" style="align-self:end">Salida programada: ${colaborador.hora_salida}. 0–24 min tarde no cuenta, 25–45 min = 0.5h, 45+ min = 1h.</div>`
+            ? `<div class="field"><label>Hora de salida real</label><input class="input" type="time" name="hora_salida_real"></div>`
             : `<div class="field"><label>Horas extra</label><input class="input" type="number" step="0.25" min="0" name="horas_manual"></div>`
         }
       </div>
-      <div id="heCampoDoble" class="field" style="display:none">
-        <label>Horas trabajadas ese día</label>
-        <input class="input" type="number" step="0.25" min="0" name="horas_dobles">
-      </div>
-      <div class="field"><label>Motivo (opcional)</label><input class="input" name="motivo"></div>
+      ${
+        tieneHorario
+          ? `<p class="field hint" id="heCalcPreview">Salida programada: ${colaborador.hora_salida}. 0–24 min tarde no cuenta, 25–45 min = 0.5h, 45+ min = 1h. Se paga a 1.5x.</p>`
+          : ""
+      }
+      <div class="field"><label>Motivo</label><input class="input" name="motivo" required></div>
       <button class="btn btn-primary btn-block" type="submit">Registrar</button>
     </form>
   `;
@@ -1335,37 +1333,27 @@ function attachHorasExtraForm(host, colaborador, onRegistered) {
   const form = host.querySelector("#heForm");
   if (!form) return;
 
-  form.tipo.addEventListener("change", () => {
-    const esDoble = form.tipo.value === "doble";
-    document.getElementById("heCampoSimple").style.display = esDoble ? "none" : "grid";
-    document.getElementById("heCampoDoble").style.display = esDoble ? "block" : "none";
-  });
-
   if (colaborador.hora_salida && form.hora_salida_real) {
     form.hora_salida_real.addEventListener("change", () => {
       const horas = calcularHorasExtra(colaborador.hora_salida, form.hora_salida_real.value);
-      document.getElementById("heCalcPreview").textContent = `Horas extra calculadas: ${horas}h (salida programada ${colaborador.hora_salida}).`;
+      document.getElementById("heCalcPreview").textContent = `Horas extra calculadas: ${horas}h (salida programada ${colaborador.hora_salida}), pagadas a 1.5x.`;
     });
   }
 
   form.addEventListener("submit", async (e) => {
     e.preventDefault();
     const f = new FormData(form);
-    const tipo = f.get("tipo");
-    const horas =
-      tipo === "doble"
-        ? Number(f.get("horas_dobles"))
-        : colaborador.hora_salida
-        ? calcularHorasExtra(colaborador.hora_salida, f.get("hora_salida_real"))
-        : Number(f.get("horas_manual"));
+    const horas = colaborador.hora_salida
+      ? calcularHorasExtra(colaborador.hora_salida, f.get("hora_salida_real"))
+      : Number(f.get("horas_manual"));
     if (!horas || horas <= 0) return toast("No hay horas extra que registrar con esos datos.", true);
     try {
       await api.registrarHorasExtra(
         colaborador.id,
-        { fecha: f.get("fecha"), hora_salida_real: tipo === "doble" ? null : f.get("hora_salida_real") || null, horas, tipo, motivo: f.get("motivo") || null },
+        { fecha: f.get("fecha"), hora_salida_real: f.get("hora_salida_real") || null, horas, tipo: "simple", motivo: f.get("motivo") },
         profile.id
       );
-      toast(`Registradas ${horas}h ${tipo === "doble" ? "dobles" : "simples"} (quedan pendientes de validación).`);
+      toast(`Registradas ${horas}h (quedan pendientes de validación).`);
       onRegistered();
     } catch (err) {
       handleErr(err);
@@ -1382,14 +1370,14 @@ async function renderMisHorasExtra(host, colaborador, onRegistered) {
   host.innerHTML = `
     <div class="stat-grid">
       <div class="stat-tile"><div class="stat-value">${validadas}</div><div class="stat-label">Horas validadas — ${fmtPeriodo(periodo)}</div></div>
-      <div class="stat-tile"><div class="stat-value">${pendientes}</div><div class="stat-label">Horas pendientes</div></div>
+      <div class="stat-tile"><div class="stat-value">${pendientes}</div><div class="stat-label">Horas pendientes de validar por RRHH</div></div>
     </div>
     ${formHorasExtraHtml(colaborador)}
     ${
       registros.length
         ? registros
             .map(
-              (r) => `<div class="list-row"><div class="list-row-main"><div class="list-row-title">${fmtDate(r.fecha)} — ${r.horas}h ${r.tipo === "doble" ? "(doble)" : ""}</div><div class="list-row-sub">${escapeHtml(r.motivo || "")}</div></div>${pillEstado(r.estado)}</div>`
+              (r) => `<div class="list-row"><div class="list-row-main"><div class="list-row-title">${fmtDate(r.fecha)} — ${r.horas}h</div><div class="list-row-sub">${escapeHtml(r.motivo || "")}</div></div>${pillEstado(r.estado)}</div>`
             )
             .join("")
         : `<div class="empty-state">Sin registros en ${fmtPeriodo(periodo)}.</div>`
@@ -1411,7 +1399,7 @@ async function renderEquipoHorasExtra(host) {
             .map(
               (r) => `
         <div class="list-row">
-          <div class="list-row-main"><div class="list-row-title">${escapeHtml(r.colaborador?.full_name || "—")} — ${fmtDate(r.fecha)}</div><div class="list-row-sub">${r.horas}h ${r.tipo === "doble" ? "(doble)" : ""} · ${escapeHtml(r.motivo || "")}</div></div>
+          <div class="list-row-main"><div class="list-row-title">${escapeHtml(r.colaborador?.full_name || "—")} — ${fmtDate(r.fecha)}</div><div class="list-row-sub">${r.horas}h · ${escapeHtml(r.motivo || "")}</div></div>
           <button class="btn btn-green btn-sm" data-validar="${r.id}">Validar</button>
         </div>`
             )
@@ -1813,6 +1801,29 @@ async function renderRolesView() {
   const root = renderShell(`<div class="empty-state">Cargando…</div>`, "#/roles");
   const isRrhh = profile.role === "rrhh";
   const roles = await api.listDescripcionesRoles();
+
+  if (!isRrhh) {
+    // Un colaborador solo puede ver el descriptor de su propio puesto (la
+    // RLS de descripciones_roles ya lo filtra así del lado del servidor).
+    const miPuesto = roles[0];
+    root.innerHTML = miPuesto
+      ? `<div class="card">
+          <div class="card-title">${escapeHtml(miPuesto.puesto)}</div>
+          <p class="label-sm" style="margin:2px 0 8px">${[miPuesto.codigo, miPuesto.empresa, miPuesto.area].filter(Boolean).map(escapeHtml).join(" · ")}</p>
+          <p style="color:var(--text-dim);white-space:pre-wrap">${escapeHtml(miPuesto.descripcion || "Sin descripción.")}</p>
+          <div style="display:flex;gap:8px;margin-top:10px">
+            <button class="btn btn-ghost btn-sm" id="verMiRolBtn">Ver detalle completo</button>
+            <button class="btn btn-ghost btn-sm" id="imprimirMiRolBtn">Imprimir</button>
+          </div>
+        </div>`
+      : `<div class="empty-state">Todavía no hay un descriptor de puesto registrado para tu puesto.</div>`;
+    if (miPuesto) {
+      document.getElementById("verMiRolBtn").addEventListener("click", () => verDetallePuesto(miPuesto));
+      document.getElementById("imprimirMiRolBtn").addEventListener("click", () => imprimirPuesto(miPuesto));
+    }
+    return;
+  }
+
   const empresas = [...new Set(roles.map((r) => r.empresa).filter(Boolean))].sort();
 
   const drawList = (filtroEmpresa) => {

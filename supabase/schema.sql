@@ -395,14 +395,14 @@ create policy solicitudes_vac_update on public.solicitudes_vacaciones
     or (colaborador_id = auth.uid() and estado = 'pendiente')
   );
 
--- documentos: cada quien ve/sube los suyos; RRHH ve y sube a cualquiera.
+-- documentos: cada quien ve los suyos; solo RRHH puede subir/asignar documentos.
 drop policy if exists documentos_select on public.documentos;
 create policy documentos_select on public.documentos
   for select to authenticated using (colaborador_id = auth.uid() or public.current_role() = 'rrhh');
 
 drop policy if exists documentos_insert on public.documentos;
 create policy documentos_insert on public.documentos
-  for insert to authenticated with check (colaborador_id = auth.uid() or public.current_role() = 'rrhh');
+  for insert to authenticated with check (public.current_role() = 'rrhh');
 
 drop policy if exists documentos_delete_rrhh on public.documentos;
 create policy documentos_delete_rrhh on public.documentos
@@ -508,10 +508,15 @@ drop policy if exists actividades_write_rrhh on public.actividades;
 create policy actividades_write_rrhh on public.actividades
   for all to authenticated using (public.current_role() = 'rrhh') with check (public.current_role() = 'rrhh');
 
--- descripción de roles: todos ven; solo RRHH crea/edita.
+-- descripción de roles: RRHH ve todos; un colaborador solo ve el descriptor
+-- de su propio puesto (coincidencia por nombre de puesto, sin distinguir
+-- mayúsculas/espacios), no el de los demás.
 drop policy if exists roles_select on public.descripciones_roles;
 create policy roles_select on public.descripciones_roles
-  for select to authenticated using (true);
+  for select to authenticated using (
+    public.current_role() = 'rrhh'
+    or lower(trim(puesto)) = lower(trim(coalesce((select puesto from public.profiles where id = auth.uid()), '')))
+  );
 
 drop policy if exists roles_write_rrhh on public.descripciones_roles;
 create policy roles_write_rrhh on public.descripciones_roles
@@ -539,11 +544,7 @@ create policy documentos_storage_select on storage.objects
 drop policy if exists documentos_storage_insert on storage.objects;
 create policy documentos_storage_insert on storage.objects
   for insert to authenticated with check (
-    bucket_id = 'documentos'
-    and (
-      public.current_role() = 'rrhh'
-      or (storage.foldername(name))[1] = auth.uid()::text
-    )
+    bucket_id = 'documentos' and public.current_role() = 'rrhh'
   );
 
 drop policy if exists documentos_storage_delete on storage.objects;
