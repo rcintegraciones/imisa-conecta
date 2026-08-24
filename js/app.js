@@ -2212,14 +2212,34 @@ function openReciboModal(colaborador, periodo, ingresosAuto) {
 // siguiendo los machotes reales de Accesorios Ilimitados.
 // ============================================================================
 
+const LETTERHEAD_ACCISA = {
+  logo: "/assets/logo-accesorios-ilimitados.jpg",
+  razonSocial: "Accesorios Ilimitados, Sociedad Anónima",
+  direccion: "6ª. Avenida 9-39 Zona 9, Guatemala C.A.",
+  telefono: "(502) 2326-1919",
+  email: "accesorios@imisagt.com",
+};
+const LETTERHEAD_ISSA = {
+  logo: "/assets/logo-issa.jpeg",
+  razonSocial: "Internacional de Suministros, Sociedad Anónima",
+  direccion: "Ruta 6, 3-19, Zona 4 Guatemala, C.A.",
+  telefono: "(502) 2326-1919 – Fax: (502) 2326-1912",
+  email: "matabi@imisagt.com",
+};
+const LETTERHEAD_IMISA = {
+  logo: "/assets/logo-imisa.jpeg",
+  razonSocial: "Importadora de Maquinaria Industrial, Sociedad Anónima",
+  direccion: "Ruta 6, 3-19, Zona 4 Guatemala, C.A.",
+  telefono: "(502) 2326-1919",
+  email: "maquinaria@imisagt.com",
+};
 const LETTERHEAD_POR_EMPRESA = {
-  "accesorios ilimitados": {
-    logo: "/assets/logo-accesorios-ilimitados.jpg",
-    razonSocial: "Accesorios Ilimitados, Sociedad Anónima",
-    direccion: "6ª. Avenida 9-39 Zona 9, Guatemala C.A.",
-    telefono: "(502) 2326-1919",
-    email: "accesorios@imisagt.com",
-  },
+  // "accesorios ilimitados" se deja por compatibilidad con datos de prueba;
+  // "accisa" es el valor real que usa el campo Empresa en Planilla.
+  "accesorios ilimitados": LETTERHEAD_ACCISA,
+  accisa: LETTERHEAD_ACCISA,
+  issa: LETTERHEAD_ISSA,
+  imisa: LETTERHEAD_IMISA,
 };
 
 function getLetterhead(empresa) {
