@@ -1458,7 +1458,15 @@ async function renderHorasExtra() {
     </div>
     <div class="card">
       <div class="card-title">Registro biométrico</div>
-      <div class="field" style="max-width:220px"><label>Mes</label><input class="input" type="month" id="biometricoPeriodo" value="${currentPeriodo()}"></div>
+      <p class="label-sm" style="color:var(--text-mute);margin-bottom:10px">
+        Sube aquí el archivo .xls/.xlsx que exporta el biométrico (columnas Nombre y Fecha/Hora). El sistema calcula
+        solo las horas extra (salida real vs. hora programada de cada quien) y las deja pendientes de validar.
+      </p>
+      <div class="row-2" style="align-items:end;margin-bottom:14px">
+        <div class="field"><label>Archivo del biométrico</label><input class="input" type="file" id="biometricoFile" accept=".xls,.xlsx"></div>
+        <button class="btn btn-primary" id="biometricoSubirBtn" type="button">Subir y procesar</button>
+      </div>
+      <div class="field" style="max-width:220px"><label>Mes a mostrar</label><input class="input" type="month" id="biometricoPeriodo" value="${currentPeriodo()}"></div>
       <div id="biometricoHost"></div>
     </div>
   `;
@@ -1512,22 +1520,219 @@ async function renderHorasExtra() {
   document.getElementById("congelarColabSelect").addEventListener("change", drawCongelar);
   document.getElementById("congelarPeriodo").addEventListener("change", drawCongelar);
 
+  let biometricoRegistros = [];
+  let biometricoSort = { key: "fecha", dir: "desc" };
+
+  const COLUMNAS_BIOMETRICO = [
+    { key: "colaborador", label: "Colaborador" },
+    { key: "fecha", label: "Fecha" },
+    { key: "hora_salida_real", label: "Hora salida" },
+    { key: "tipo", label: "Tipo" },
+    { key: "horas", label: "Horas extra" },
+  ];
+
+  const valorOrdenable = (r, key) => {
+    if (key === "colaborador") return (r.colaborador?.full_name || "").toLowerCase();
+    if (key === "horas") return Number(r.horas);
+    return r[key] ?? "";
+  };
+
+  const renderBiometricoTabla = () => {
+    const host = document.getElementById("biometricoHost");
+    if (!biometricoRegistros.length) {
+      host.innerHTML = `<div class="empty-state">Sin registros biométricos en ${fmtPeriodo(document.getElementById("biometricoPeriodo").value)}.</div>`;
+      return;
+    }
+    const { key, dir } = biometricoSort;
+    const factor = dir === "asc" ? 1 : -1;
+    const ordenados = [...biometricoRegistros].sort((a, b) => {
+      const va = valorOrdenable(a, key);
+      const vb = valorOrdenable(b, key);
+      if (va < vb) return -1 * factor;
+      if (va > vb) return 1 * factor;
+      return 0;
+    });
+    host.innerHTML = `<div class="table-wrap"><table class="data">
+        <thead><tr>${COLUMNAS_BIOMETRICO.map(
+          (c) => `<th data-sort-key="${c.key}" style="cursor:pointer;user-select:none">${c.label}${key === c.key ? (dir === "asc" ? " ▲" : " ▼") : ""}</th>`
+        ).join("")}</tr></thead>
+        <tbody>${ordenados
+          .map((r) => `<tr><td>${escapeHtml(r.colaborador?.full_name || "—")}</td><td>${fmtDate(r.fecha)}</td><td>${r.hora_salida_real || "—"}</td><td>${r.tipo === "doble" ? "Doble" : "Simple"}</td><td>${r.horas}h</td></tr>`)
+          .join("")}</tbody>
+      </table></div>`;
+    host.querySelectorAll("[data-sort-key]").forEach((th) =>
+      th.addEventListener("click", () => {
+        const k = th.dataset.sortKey;
+        biometricoSort = { key: k, dir: biometricoSort.key === k && biometricoSort.dir === "asc" ? "desc" : "asc" };
+        renderBiometricoTabla();
+      })
+    );
+  };
+
   const drawBiometrico = async () => {
     const periodo = document.getElementById("biometricoPeriodo").value;
     const host = document.getElementById("biometricoHost");
     host.innerHTML = `<div class="empty-state">Cargando…</div>`;
-    const registros = await api.listHorasExtraBiometrico(periodo);
-    host.innerHTML = registros.length
-      ? `<div class="table-wrap"><table class="data">
-          <thead><tr><th>Colaborador</th><th>Fecha</th><th>Hora salida</th><th>Tipo</th><th>Horas extra</th></tr></thead>
-          <tbody>${registros
-            .map((r) => `<tr><td>${escapeHtml(r.colaborador?.full_name || "—")}</td><td>${fmtDate(r.fecha)}</td><td>${r.hora_salida_real || "—"}</td><td>${r.tipo === "doble" ? "Doble" : "Simple"}</td><td>${r.horas}h</td></tr>`)
-            .join("")}</tbody>
-        </table></div>`
-      : `<div class="empty-state">Sin registros biométricos en ${fmtPeriodo(periodo)}. (Se llenan automáticamente desde n8n.)</div>`;
+    biometricoRegistros = await api.listHorasExtraBiometrico(periodo);
+    renderBiometricoTabla();
   };
   document.getElementById("biometricoPeriodo").addEventListener("change", drawBiometrico);
   await drawBiometrico();
+
+  document.getElementById("biometricoSubirBtn").addEventListener("click", async () => {
+    const fileInput = document.getElementById("biometricoFile");
+    const file = fileInput.files[0];
+    if (!file) return toast("Selecciona el archivo del biométrico primero.", true);
+    const btn = document.getElementById("biometricoSubirBtn");
+    btn.disabled = true;
+    btn.textContent = "Procesando…";
+    try {
+      const resumen = await procesarBiometrico(file, colaboradores);
+      let msg = `${resumen.insertados} registro(s) de horas extra nuevos.`;
+      if (resumen.yaExistian) msg += ` ${resumen.yaExistian} ya estaban cargados.`;
+      if (resumen.sinMatch.length) msg += ` ${resumen.sinMatch.length} nombre(s) no se pudieron emparejar: ${resumen.sinMatch.join(", ")}.`;
+      if (resumen.sinCuenta.length) msg += ` Sin cuenta creada: ${resumen.sinCuenta.join(", ")}.`;
+      if (resumen.sinHorario.length) msg += ` Sin hora de entrada configurada: ${resumen.sinHorario.join(", ")}.`;
+      toast(msg);
+      fileInput.value = "";
+      await drawBiometrico();
+    } catch (err) {
+      handleErr(err);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = "Subir y procesar";
+    }
+  });
+}
+
+function normalizarNombre(s) {
+  return String(s || "")
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "")
+    .toLowerCase()
+    .trim();
+}
+
+function encontrarColaboradorPorNombre(nombreBiometrico, colaboradores) {
+  const palabras = normalizarNombre(nombreBiometrico).split(/\s+/).filter(Boolean);
+  const candidatos = colaboradores.filter((c) => {
+    const nl = normalizarNombre(c.full_name);
+    return palabras.length && palabras.every((p) => nl.includes(p));
+  });
+  return candidatos.length === 1 ? candidatos[0] : null;
+}
+
+function sumarHorasAHora(hhmm, horas) {
+  const [h, m] = hhmm.split(":").map(Number);
+  let totalMin = h * 60 + m + horas * 60;
+  totalMin = ((totalMin % 1440) + 1440) % 1440;
+  const hh = Math.floor(totalMin / 60);
+  const mm = Math.round(totalMin % 60);
+  return `${String(hh).padStart(2, "0")}:${String(mm).padStart(2, "0")}`;
+}
+
+// Parsea el .xls/.xlsx crudo del biométrico: detecta las columnas Nombre y
+// Fecha/Hora buscando esos encabezados (sin asumir una posición fija), y
+// devuelve una lista de eventos { nombre, fecha (YYYY-MM-DD), hora (HH:MM) }.
+function parseEventosBiometrico(aoa) {
+  let colNombre = -1;
+  let colFecha = -1;
+  for (const row of aoa) {
+    const idxNombre = row.findIndex((v) => typeof v === "string" && /nombre/i.test(v));
+    const idxFecha = row.findIndex((v) => typeof v === "string" && /fecha/i.test(v));
+    if (idxNombre >= 0 && idxFecha >= 0) {
+      colNombre = idxNombre;
+      colFecha = idxFecha;
+      break;
+    }
+  }
+  if (colNombre < 0 || colFecha < 0) {
+    throw new Error("No se encontraron las columnas de Nombre y Fecha/Hora en el archivo.");
+  }
+  const eventos = [];
+  for (const row of aoa) {
+    const nombre = row[colNombre];
+    const fh = row[colFecha];
+    if (!nombre || !fh) continue;
+    const m = String(fh).match(/(\d{1,2})\/(\d{1,2})\/(\d{4})\s+(\d{1,2}):(\d{2})/);
+    if (!m) continue;
+    const [, dd, mm, yyyy, hh, mi] = m;
+    eventos.push({
+      nombre: String(nombre).trim(),
+      fecha: `${yyyy}-${mm.padStart(2, "0")}-${dd.padStart(2, "0")}`,
+      hora: `${hh.padStart(2, "0")}:${mi}`,
+    });
+  }
+  return eventos;
+}
+
+async function procesarBiometrico(file, colaboradores) {
+  const XLSX = await import("https://esm.sh/xlsx@0.18.5");
+  const buf = await file.arrayBuffer();
+  const wb = XLSX.read(buf, { type: "array" });
+  const ws = wb.Sheets[wb.SheetNames[0]];
+  const aoa = XLSX.utils.sheet_to_json(ws, { header: 1, raw: false, defval: "" });
+  const eventos = parseEventosBiometrico(aoa);
+
+  // Última marca del día = hora de salida real (sin importar cuántas marcas
+  // haya ese día: entrada, salida/entrada de almuerzo, salida final).
+  const porPersonaDia = new Map();
+  for (const ev of eventos) {
+    const key = `${ev.nombre}|${ev.fecha}`;
+    const actual = porPersonaDia.get(key);
+    if (!actual || ev.hora > actual.hora) porPersonaDia.set(key, ev);
+  }
+
+  const periodos = [...new Set([...porPersonaDia.values()].map((e) => e.fecha.slice(0, 7)))];
+  const existentesPorPeriodo = await Promise.all(periodos.map((p) => api.listHorasExtraBiometrico(p)));
+  const yaExisten = new Set();
+  existentesPorPeriodo.flat().forEach((r) => yaExisten.add(`${r.colaborador_id}|${r.fecha}`));
+
+  const sinMatch = new Set();
+  const sinCuenta = new Set();
+  const sinHorario = new Set();
+  let yaExistian = 0;
+  const filas = [];
+
+  for (const { nombre, fecha, hora } of porPersonaDia.values()) {
+    const colaborador = encontrarColaboradorPorNombre(nombre, colaboradores);
+    if (!colaborador) {
+      sinMatch.add(nombre);
+      continue;
+    }
+    if (!colaborador.hora_entrada) {
+      sinHorario.add(colaborador.full_name);
+      continue;
+    }
+    if (yaExisten.has(`${colaborador.id}|${fecha}`)) {
+      yaExistian++;
+      continue;
+    }
+    // Turno de 9h (8h netas + 1h de almuerzo), salvo que ya tenga hora_salida configurada.
+    const horaSalidaProgramada = colaborador.hora_salida || sumarHorasAHora(colaborador.hora_entrada, 9);
+    const horas = calcularHorasExtra(horaSalidaProgramada, hora);
+    if (horas <= 0) continue;
+    filas.push({
+      colaborador_id: colaborador.id,
+      fecha,
+      hora_salida_real: hora,
+      horas,
+      tipo: "simple",
+      motivo: "Registro biométrico — salida real vs. hora programada",
+      origen: "biometrico",
+      estado: "pendiente",
+    });
+  }
+
+  if (filas.length) await api.insertarHorasExtraBiometricoLote(filas);
+
+  return {
+    insertados: filas.length,
+    yaExistian,
+    sinMatch: [...sinMatch],
+    sinCuenta: [...sinCuenta],
+    sinHorario: [...sinHorario],
+  };
 }
 
 // ============================================================================

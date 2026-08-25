@@ -354,6 +354,13 @@ export async function listHorasExtraBiometrico(periodo) {
   return data;
 }
 
+export async function insertarHorasExtraBiometricoLote(filas) {
+  if (!filas.length) return [];
+  const { data, error } = await supabase.from("horas_extra").insert(filas).select();
+  if (error) throw error;
+  return data;
+}
+
 export async function registrarHorasExtra(colaboradorId, { fecha, hora_salida_real, horas, tipo, motivo }, userId) {
   const { data, error } = await supabase
     .from("horas_extra")
