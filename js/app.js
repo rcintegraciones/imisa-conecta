@@ -1466,7 +1466,14 @@ async function renderHorasExtra() {
         <div class="field"><label>Archivo del biométrico</label><input class="input" type="file" id="biometricoFile" accept=".xls,.xlsx"></div>
         <button class="btn btn-primary" id="biometricoSubirBtn" type="button">Subir y procesar</button>
       </div>
-      <div class="field" style="max-width:220px"><label>Mes a mostrar</label><input class="input" type="month" id="biometricoPeriodo" value="${currentPeriodo()}"></div>
+      <div class="row-2">
+        <div class="field" style="max-width:220px"><label>Mes a mostrar</label><input class="input" type="month" id="biometricoPeriodo" value="${currentPeriodo()}"></div>
+        <div class="field"><label>Filtrar por colaborador</label>
+          <select class="select" id="biometricoColabFiltro"><option value="">Todos</option>
+            ${colaboradores.map((c) => `<option value="${c.id}">${escapeHtml(c.full_name)}</option>`).join("")}
+          </select>
+        </div>
+      </div>
       <div id="biometricoHost"></div>
     </div>
   `;
@@ -1539,13 +1546,15 @@ async function renderHorasExtra() {
 
   const renderBiometricoTabla = () => {
     const host = document.getElementById("biometricoHost");
-    if (!biometricoRegistros.length) {
-      host.innerHTML = `<div class="empty-state">Sin registros biométricos en ${fmtPeriodo(document.getElementById("biometricoPeriodo").value)}.</div>`;
+    const colabFiltro = document.getElementById("biometricoColabFiltro").value;
+    const filtrados = colabFiltro ? biometricoRegistros.filter((r) => r.colaborador_id === colabFiltro) : biometricoRegistros;
+    if (!filtrados.length) {
+      host.innerHTML = `<div class="empty-state">Sin registros biométricos en ${fmtPeriodo(document.getElementById("biometricoPeriodo").value)}${colabFiltro ? " para este colaborador" : ""}.</div>`;
       return;
     }
     const { key, dir } = biometricoSort;
     const factor = dir === "asc" ? 1 : -1;
-    const ordenados = [...biometricoRegistros].sort((a, b) => {
+    const ordenados = [...filtrados].sort((a, b) => {
       const va = valorOrdenable(a, key);
       const vb = valorOrdenable(b, key);
       if (va < vb) return -1 * factor;
@@ -1577,6 +1586,7 @@ async function renderHorasExtra() {
     renderBiometricoTabla();
   };
   document.getElementById("biometricoPeriodo").addEventListener("change", drawBiometrico);
+  document.getElementById("biometricoColabFiltro").addEventListener("change", renderBiometricoTabla);
   await drawBiometrico();
 
   document.getElementById("biometricoSubirBtn").addEventListener("click", async () => {
