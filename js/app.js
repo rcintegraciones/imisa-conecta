@@ -1561,6 +1561,7 @@ async function renderHorasExtra() {
       if (va > vb) return 1 * factor;
       return 0;
     });
+    const totalHoras = filtrados.reduce((s, r) => s + Number(r.horas || 0), 0);
     host.innerHTML = `<div class="table-wrap"><table class="data">
         <thead><tr>${COLUMNAS_BIOMETRICO.map(
           (c) => `<th data-sort-key="${c.key}" style="cursor:pointer;user-select:none">${c.label}${key === c.key ? (dir === "asc" ? " ▲" : " ▼") : ""}</th>`
@@ -1568,6 +1569,9 @@ async function renderHorasExtra() {
         <tbody>${ordenados
           .map((r) => `<tr><td>${escapeHtml(r.colaborador?.full_name || "—")}</td><td>${fmtDate(r.fecha)}</td><td>${r.hora_salida_real || "—"}</td><td>${r.tipo === "doble" ? "Doble" : "Simple"}</td><td>${r.horas}h</td></tr>`)
           .join("")}</tbody>
+        <tfoot><tr style="font-weight:700;border-top:1px solid var(--border-strong)">
+          <td colspan="4">Total${colabFiltro ? " (filtrado)" : ""}</td><td>${totalHoras}h</td>
+        </tr></tfoot>
       </table></div>`;
     host.querySelectorAll("[data-sort-key]").forEach((th) =>
       th.addEventListener("click", () => {
