@@ -1168,6 +1168,13 @@ async function renderVacacionesAdmin(root) {
       }
     </div>
     <div class="card">
+      <div class="card-title">Saldo por colaborador</div>
+      <div class="field"><select class="select" id="colabSelect"><option value="">Selecciona un colaborador…</option>
+        ${colaboradores.map((c) => `<option value="${c.id}">${escapeHtml(c.full_name)}</option>`).join("")}
+      </select></div>
+      <div id="colabDetail"></div>
+    </div>
+    <div class="card">
       <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:10px">
         <div class="card-title" style="margin:0">Vacaciones pendientes por colaborador</div>
         <div class="field" style="margin:0;min-width:200px">
@@ -1177,13 +1184,6 @@ async function renderVacacionesAdmin(root) {
         </div>
       </div>
       <div id="resumenVacacionesHost"></div>
-    </div>
-    <div class="card">
-      <div class="card-title">Saldo por colaborador</div>
-      <div class="field"><select class="select" id="colabSelect"><option value="">Selecciona un colaborador…</option>
-        ${colaboradores.map((c) => `<option value="${c.id}">${escapeHtml(c.full_name)}</option>`).join("")}
-      </select></div>
-      <div id="colabDetail"></div>
     </div>
   `;
 
