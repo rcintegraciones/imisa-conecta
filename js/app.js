@@ -754,7 +754,12 @@ async function renderPlanilla() {
     });
 
     const periodoInput = document.getElementById("periodoSelect");
-    const redrawDesglose = () => drawDesgloseMensual(colaboradores, periodoInput.value, empresaActual);
+    const redrawDesglose = () =>
+      drawDesgloseMensual(colaboradores, periodoInput.value, empresaActual).catch((err) => {
+        handleErr(err);
+        const tbody = document.getElementById("desgloseTableBody");
+        if (tbody) tbody.innerHTML = `<tr><td colspan="9" class="empty-state">Error al cargar: ${escapeHtml(err.message || String(err))}</td></tr>`;
+      });
     await redrawDesglose();
     periodoInput.addEventListener("change", redrawDesglose);
   } catch (err) {
