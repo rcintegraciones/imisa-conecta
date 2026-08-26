@@ -1819,7 +1819,7 @@ async function renderHorasExtra() {
         <button class="btn btn-primary" id="biometricoSubirBtn" type="button">Subir y procesar</button>
       </div>
       <div class="row-2">
-        <div class="field" style="max-width:220px"><label>Mes a mostrar</label><input class="input" type="month" id="biometricoPeriodo" value="${currentPeriodo()}"></div>
+        <div class="field" style="max-width:220px"><label>Periodo a mostrar</label><input class="input" type="month" id="biometricoPeriodo" value="${currentPeriodo()}"></div>
         <div class="field"><label>Filtrar por colaborador</label>
           <select class="select" id="biometricoColabFiltro"><option value="">Todos</option>
             ${colaboradores.map((c) => `<option value="${c.id}">${escapeHtml(c.full_name)}</option>`).join("")}
