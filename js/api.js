@@ -351,14 +351,45 @@ export async function listHorasExtra(colaboradorId, anio) {
   return data;
 }
 
+// El ciclo de horas extra NO es mes calendario: va del 26 del mes anterior al
+// 25 del mes del periodo (ej. periodo "2026-07" = 26 jun al 25 jul). El
+// periodo se nombra por el mes en que cierra (el 25).
+export function rangoPeriodoHorasExtra(periodo) {
+  const [y, m] = periodo.split("-").map(Number);
+  let yDesde = y;
+  let mDesde = m - 1;
+  if (mDesde === 0) {
+    mDesde = 12;
+    yDesde -= 1;
+  }
+  const desde = `${yDesde}-${String(mDesde).padStart(2, "0")}-26`;
+  const hasta = `${y}-${String(m).padStart(2, "0")}-25`;
+  return { desde, hasta };
+}
+
+// Dado un YYYY-MM-DD, devuelve a qué periodo de horas extra pertenece según
+// el ciclo 26-25 (el día 26 en adelante ya cae en el periodo del mes siguiente).
+export function periodoDeFecha(fechaISO) {
+  const [y, m, d] = fechaISO.split("-").map(Number);
+  if (d <= 25) return `${y}-${String(m).padStart(2, "0")}`;
+  let y2 = y;
+  let m2 = m + 1;
+  if (m2 === 13) {
+    m2 = 1;
+    y2 += 1;
+  }
+  return `${y2}-${String(m2).padStart(2, "0")}`;
+}
+
 export async function listHorasExtraPorPeriodo(colaboradorId, periodo) {
+  const { desde, hasta } = rangoPeriodoHorasExtra(periodo);
   const { data, error } = await supabase
     .from("horas_extra")
     .select("*")
     .eq("colaborador_id", colaboradorId)
     .eq("origen", "manual")
-    .gte("fecha", `${periodo}-01`)
-    .lte("fecha", `${periodo}-31`)
+    .gte("fecha", desde)
+    .lte("fecha", hasta)
     .order("fecha", { ascending: false });
   if (error) throw error;
   return data;
@@ -382,7 +413,10 @@ export async function listHorasExtraBiometrico(periodo) {
     .select("*, colaborador:profiles!horas_extra_colaborador_id_fkey(full_name)")
     .eq("origen", "biometrico")
     .order("fecha", { ascending: false });
-  if (periodo) query = query.gte("fecha", `${periodo}-01`).lte("fecha", `${periodo}-31`);
+  if (periodo) {
+    const { desde, hasta } = rangoPeriodoHorasExtra(periodo);
+    query = query.gte("fecha", desde).lte("fecha", hasta);
+  }
   const { data, error } = await query;
   if (error) throw error;
   return data;

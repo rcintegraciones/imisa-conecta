@@ -86,9 +86,20 @@ function pillEstado(estado) {
   return `<span class="pill pill-${estado}">${escapeHtml(label)}</span>`;
 }
 
+// El periodo de horas extra va del 26 del mes anterior al 25 del mes en curso
+// (no es mes calendario), y se nombra por el mes en que cierra.
 function currentPeriodo() {
   const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+  let y = d.getFullYear();
+  let m = d.getMonth() + 1;
+  if (d.getDate() > 25) {
+    m += 1;
+    if (m === 13) {
+      m = 1;
+      y += 1;
+    }
+  }
+  return `${y}-${String(m).padStart(2, "0")}`;
 }
 
 function fmtPeriodo(periodo) {
@@ -2033,7 +2044,7 @@ async function procesarBiometrico(file, colaboradores) {
     if (!actual || ev.hora > actual.hora) porPersonaDia.set(key, ev);
   }
 
-  const periodos = [...new Set([...porPersonaDia.values()].map((e) => e.fecha.slice(0, 7)))];
+  const periodos = [...new Set([...porPersonaDia.values()].map((e) => api.periodoDeFecha(e.fecha)))];
   const existentesPorPeriodo = await Promise.all(periodos.map((p) => api.listHorasExtraBiometrico(p)));
   const yaExisten = new Set();
   existentesPorPeriodo.flat().forEach((r) => yaExisten.add(`${r.colaborador_id}|${r.fecha}`));
