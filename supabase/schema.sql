@@ -198,6 +198,20 @@ create table if not exists public.suspensiones_igss (
   updated_at timestamptz not null default now()
 );
 
+-- Referencia histórica: cantidad de horas extra que ya traía capturada la
+-- planilla original de un mes (antes de existir el registro biométrico en el
+-- sistema). Sirve para cruzar/validar contra lo que calcula el biométrico.
+-- Se carga una sola vez por mes vía SQL, no tiene formulario en la app.
+create table if not exists public.horas_extra_planilla_original (
+  id uuid primary key default gen_random_uuid(),
+  colaborador_id uuid not null references public.profiles(id) on delete cascade,
+  periodo text not null,
+  horas numeric not null default 0,
+  creado_por uuid references public.profiles(id),
+  created_at timestamptz not null default now(),
+  unique (colaborador_id, periodo)
+);
+
 -- ----------------------------------------------------------------------------
 -- DOCUMENTOS (drive por colaborador) + solicitudes de documentos
 -- ----------------------------------------------------------------------------
@@ -416,6 +430,12 @@ create policy solicitudes_vac_update on public.solicitudes_vacaciones
 alter table public.suspensiones_igss enable row level security;
 drop policy if exists suspensiones_igss_rrhh on public.suspensiones_igss;
 create policy suspensiones_igss_rrhh on public.suspensiones_igss
+  for all to authenticated using (public.current_role() = 'rrhh') with check (public.current_role() = 'rrhh');
+
+-- horas extra de planilla original: solo RRHH (dato de validación interna).
+alter table public.horas_extra_planilla_original enable row level security;
+drop policy if exists horas_extra_planilla_original_rrhh on public.horas_extra_planilla_original;
+create policy horas_extra_planilla_original_rrhh on public.horas_extra_planilla_original
   for all to authenticated using (public.current_role() = 'rrhh') with check (public.current_role() = 'rrhh');
 
 -- documentos: cada quien ve los suyos; solo RRHH puede subir/asignar documentos.

@@ -388,6 +388,15 @@ export async function listHorasExtraBiometrico(periodo) {
   return data;
 }
 
+export async function listHorasExtraPlanillaOriginal(periodo) {
+  const { data, error } = await supabase
+    .from("horas_extra_planilla_original")
+    .select("*")
+    .eq("periodo", periodo);
+  if (error) throw error;
+  return data;
+}
+
 export async function insertarHorasExtraBiometricoLote(filas) {
   if (!filas.length) return [];
   const { data, error } = await supabase.from("horas_extra").insert(filas).select();

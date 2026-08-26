@@ -719,6 +719,16 @@ async function renderPlanilla() {
         </div>
         <p class="field hint">Click en una fila para editar incentivo, bonificación o comisiones de ese mes. El salario base viene de la compensación del colaborador y las horas extra del cierre congelado en la pestaña Horas Extra.</p>
       </div>
+      <div class="card" id="validacionHorasExtraCard" style="display:none">
+        <div class="card-title">Validación horas extra — planilla original vs. biométrico</div>
+        <p class="field hint">Cruce entre la cantidad de horas extra que ya traía capturada la planilla de ese mes (antes de tener el registro biométrico en el sistema) y lo que calculó el biométrico. Sirve para revisar diferencias antes de confiar el pago solo al cálculo automático.</p>
+        <div class="table-wrap">
+          <table class="data">
+            <thead><tr><th>Colaborador</th><th>Horas planilla original</th><th>Horas biométrico</th><th>Diferencia</th></tr></thead>
+            <tbody id="validacionHorasExtraBody"></tbody>
+          </table>
+        </div>
+      </div>
     `;
 
     let empresaActual = "";
@@ -745,11 +755,13 @@ async function drawDesgloseMensual(colaboradores, periodo, empresaFiltro) {
   const tbody = document.getElementById("desgloseTableBody");
   tbody.innerHTML = `<tr><td colspan="7" class="empty-state">Cargando…</td></tr>`;
   const activos = colaboradores.filter((p) => p.activo && (!empresaFiltro || (p.empresa || "Sin empresa") === empresaFiltro));
-  const [planillas, compensaciones, cierres, suspensiones] = await Promise.all([
+  const [planillas, compensaciones, cierres, suspensiones, referenciaOriginal, biometricoDelMes] = await Promise.all([
     api.listPlanillaMensual(periodo),
     api.listCompensaciones(),
     Promise.all(activos.map((p) => api.getCierreHorasExtra(p.id, periodo))),
     api.listSuspensionesIgss(),
+    api.listHorasExtraPlanillaOriginal(periodo),
+    api.listHorasExtraBiometrico(periodo),
   ]);
   const planById = Object.fromEntries(planillas.map((p) => [p.colaborador_id, p]));
   const compById = Object.fromEntries(compensaciones.map((c) => [c.colaborador_id, c]));
@@ -814,6 +826,44 @@ async function drawDesgloseMensual(colaboradores, periodo, empresaFiltro) {
       });
     });
   });
+
+  renderValidacionHorasExtra(colaboradores, referenciaOriginal, biometricoDelMes);
+}
+
+function renderValidacionHorasExtra(colaboradores, referenciaOriginal, biometricoDelMes) {
+  const card = document.getElementById("validacionHorasExtraCard");
+  const body = document.getElementById("validacionHorasExtraBody");
+  if (!referenciaOriginal.length) {
+    card.style.display = "none";
+    return;
+  }
+  card.style.display = "";
+  const colaboradorById = Object.fromEntries(colaboradores.map((p) => [p.id, p]));
+  const biometricoPorColaborador = {};
+  (biometricoDelMes || []).forEach((h) => {
+    biometricoPorColaborador[h.colaborador_id] = (biometricoPorColaborador[h.colaborador_id] || 0) + Number(h.horas || 0);
+  });
+  const filas = referenciaOriginal
+    .map((ref) => {
+      const p = colaboradorById[ref.colaborador_id];
+      const horasOriginal = Number(ref.horas || 0);
+      const horasBiometrico = biometricoPorColaborador[ref.colaborador_id] || 0;
+      const diferencia = horasBiometrico - horasOriginal;
+      return { nombre: p ? p.full_name : "(colaborador no encontrado)", horasOriginal, horasBiometrico, diferencia };
+    })
+    .sort((a, b) => Math.abs(b.diferencia) - Math.abs(a.diferencia));
+  body.innerHTML = filas
+    .map(
+      (f) => `
+        <tr>
+          <td>${escapeHtml(f.nombre)}</td>
+          <td>${f.horasOriginal.toFixed(1)}</td>
+          <td>${f.horasBiometrico.toFixed(1)}</td>
+          <td style="${f.diferencia !== 0 ? "color:#E4665F;font-weight:600" : ""}">${f.diferencia > 0 ? "+" : ""}${f.diferencia.toFixed(1)}</td>
+        </tr>
+      `
+    )
+    .join("");
 }
 
 function openEditPlanillaMensual(p, plan, periodo, onSaved) {
