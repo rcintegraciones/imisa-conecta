@@ -181,6 +181,23 @@ create table if not exists public.solicitudes_vacaciones (
   created_at timestamptz not null default now()
 );
 
+-- Suspensiones de IGSS: cuando el IGSS suspende a un colaborador (por cita/
+-- enfermedad), la empresa paga el primer día y el IGSS paga el resto — esos
+-- días se descuentan del salario base en Planilla. El IGSS a veces amplía la
+-- suspensión en varias visitas, por eso se puede editar después.
+create table if not exists public.suspensiones_igss (
+  id uuid primary key default gen_random_uuid(),
+  colaborador_id uuid not null references public.profiles(id) on delete cascade,
+  motivo text not null,
+  fecha_visita date not null,
+  suspendido boolean not null default false,
+  fecha_inicio date,
+  fecha_fin date,
+  creado_por uuid references public.profiles(id),
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
 -- ----------------------------------------------------------------------------
 -- DOCUMENTOS (drive por colaborador) + solicitudes de documentos
 -- ----------------------------------------------------------------------------
@@ -394,6 +411,12 @@ create policy solicitudes_vac_update on public.solicitudes_vacaciones
     public.current_role() = 'rrhh'
     or (colaborador_id = auth.uid() and estado = 'pendiente')
   );
+
+-- suspensiones IGSS: solo RRHH las ve y administra (afecta planilla, es dato sensible).
+alter table public.suspensiones_igss enable row level security;
+drop policy if exists suspensiones_igss_rrhh on public.suspensiones_igss;
+create policy suspensiones_igss_rrhh on public.suspensiones_igss
+  for all to authenticated using (public.current_role() = 'rrhh') with check (public.current_role() = 'rrhh');
 
 -- documentos: cada quien ve los suyos; solo RRHH puede subir/asignar documentos.
 drop policy if exists documentos_select on public.documentos;

@@ -165,11 +165,9 @@ export async function setPlanillaMensual(colaboradorId, periodo, { incentivo, bo
 // ---------------------------------------------------------------------------
 
 export async function listVacacionesAjustes(colaboradorId) {
-  const { data, error } = await supabase
-    .from("vacaciones_ajustes")
-    .select("*")
-    .eq("colaborador_id", colaboradorId)
-    .order("created_at", { ascending: false });
+  let query = supabase.from("vacaciones_ajustes").select("*").order("created_at", { ascending: false });
+  if (colaboradorId) query = query.eq("colaborador_id", colaboradorId);
+  const { data, error } = await query;
   if (error) throw error;
   return data;
 }
@@ -219,6 +217,42 @@ export async function resolverSolicitudVacaciones(id, estado, comentario_rrhh, u
 export async function cancelarSolicitudVacaciones(id) {
   const { error } = await supabase.from("solicitudes_vacaciones").delete().eq("id", id);
   if (error) throw error;
+}
+
+// ---------------------------------------------------------------------------
+// Suspensiones IGSS
+// ---------------------------------------------------------------------------
+
+export async function listSuspensionesIgss(colaboradorId) {
+  let query = supabase
+    .from("suspensiones_igss")
+    .select("*, colaborador:profiles!suspensiones_igss_colaborador_id_fkey(full_name, empresa)")
+    .order("fecha_visita", { ascending: false });
+  if (colaboradorId) query = query.eq("colaborador_id", colaboradorId);
+  const { data, error } = await query;
+  if (error) throw error;
+  return data;
+}
+
+export async function crearSuspensionIgss(payload, userId) {
+  const { data, error } = await supabase
+    .from("suspensiones_igss")
+    .insert({ ...payload, creado_por: userId })
+    .select()
+    .single();
+  if (error) throw error;
+  return data;
+}
+
+export async function actualizarSuspensionIgss(id, payload) {
+  const { data, error } = await supabase
+    .from("suspensiones_igss")
+    .update({ ...payload, updated_at: new Date().toISOString() })
+    .eq("id", id)
+    .select()
+    .single();
+  if (error) throw error;
+  return data;
 }
 
 // ---------------------------------------------------------------------------

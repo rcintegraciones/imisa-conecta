@@ -113,6 +113,48 @@ function calcularHorasExtra(horaSalidaProgramada, horaSalidaReal) {
   return extra;
 }
 
+const MOTIVOS_VACACIONES = [
+  "Vacaciones familiares",
+  "Viaje o turismo",
+  "Descanso personal",
+  "Motivos de salud",
+  "Trámites personales",
+  "Motivos familiares",
+  "Estudios o exámenes",
+  "Otros",
+];
+
+// Regla de suspensión IGSS: el patrono paga el primer día de la suspensión y
+// el IGSS paga el resto, así que en Planilla se debita (días - 1) por cada
+// suspensión — pero solo se resta ese "primer día" una vez por suspensión,
+// en el mes donde inició, no en cada mes que abarque.
+function diasSuspendidosEnPeriodo(susp, periodo) {
+  if (!susp.fecha_inicio || !susp.fecha_fin) return { dias: 0, esInicio: false };
+  const [y, m] = periodo.split("-").map(Number);
+  const inicioMes = new Date(y, m - 1, 1);
+  const finMes = new Date(y, m, 0);
+  const fi = new Date(susp.fecha_inicio + "T12:00:00");
+  const ff = new Date(susp.fecha_fin + "T12:00:00");
+  const desde = fi > inicioMes ? fi : inicioMes;
+  const hasta = ff < finMes ? ff : finMes;
+  if (desde > hasta) return { dias: 0, esInicio: false };
+  const dias = Math.round((hasta - desde) / 86400000) + 1;
+  const esInicio = fi.getFullYear() === y && fi.getMonth() === m - 1;
+  return { dias, esInicio };
+}
+
+function calcularDebitoIgss(suspensiones, periodo, salarioBase) {
+  let diasDebito = 0;
+  for (const s of suspensiones || []) {
+    if (!s.suspendido) continue;
+    const { dias, esInicio } = diasSuspendidosEnPeriodo(s, periodo);
+    if (dias <= 0) continue;
+    diasDebito += esInicio ? Math.max(0, dias - 1) : dias;
+  }
+  const valorDia = Number(salarioBase || 0) / 30;
+  return { diasDebito, monto: diasDebito * valorDia };
+}
+
 // Easter Sunday (algoritmo de Meeus/Jones/Butcher) — necesario para Jueves y
 // Viernes Santo, que se mueven cada año.
 function domingoDeResurreccion(year) {
@@ -315,7 +357,7 @@ function tabsForRole(role) {
   if (role === "rrhh") {
     return [
       { hash: "#/planilla", label: "Planilla" },
-      { hash: "#/vacaciones", label: "Vacaciones" },
+      { hash: "#/vacaciones", label: "Ausencias" },
       { hash: "#/documentos", label: "Documentos" },
       { hash: "#/horas-extra", label: "Horas extra" },
       { hash: "#/evaluaciones", label: "Evaluaciones" },
@@ -326,7 +368,7 @@ function tabsForRole(role) {
   }
   return [
     { hash: "#/inicio", label: "Mi perfil" },
-    { hash: "#/vacaciones", label: "Vacaciones" },
+    { hash: "#/vacaciones", label: "Ausencias" },
     { hash: "#/documentos", label: "Documentos" },
     { hash: "#/horas-extra", label: "Horas extra" },
     { hash: "#/evaluaciones", label: "Evaluaciones" },
@@ -614,11 +656,13 @@ function drawPlanillaTable(root, colaboradores, compById, empresaFiltro) {
   const activos = filtrados.filter((p) => p.activo).length;
   const rotacion = activos > 0 ? ((bajas12m / activos) * 100).toFixed(1) : "0.0";
 
-  document.getElementById("planillaStats").innerHTML = `
+  document.getElementById("planillaStatsTop").innerHTML = `
     <div class="stat-tile"><div class="stat-value">${activos}</div><div class="stat-label">Colaboradores activos</div></div>
+    <div class="stat-tile"><div class="stat-value">${rotacion}%</div><div class="stat-label">Rotación (12 meses)</div></div>
+  `;
+  document.getElementById("planillaStatsDesglose").innerHTML = `
     <div class="stat-tile"><div class="stat-value">${fmtMoney(totalMensual)}</div><div class="stat-label">Compensación mensual</div></div>
     <div class="stat-tile"><div class="stat-value">${fmtMoney(totalAnual)}</div><div class="stat-label">Compensación anual</div></div>
-    <div class="stat-tile"><div class="stat-value">${rotacion}%</div><div class="stat-label">Rotación (12 meses)</div></div>
   `;
   document.getElementById("planillaTableBody").innerHTML =
     rows || `<tr><td colspan="8" class="empty-state">Sin colaboradores en esta empresa.</td></tr>`;
@@ -649,7 +693,10 @@ async function renderPlanilla() {
           ${empresas.map((e) => `<option value="${escapeHtml(e)}">${escapeHtml(e)}</option>`).join("")}
         </select>
       </div>
-      <div class="stat-grid" id="planillaStats"></div>
+      <div class="stat-grid" id="planillaStatsTop"></div>
+      <div style="margin:4px 0 14px">
+        <button class="btn btn-ghost btn-sm" id="irADesgloseBtn" type="button">Ir a Desglose mensual ↓</button>
+      </div>
       <div class="card">
         <div class="card-title">Planilla — click en una fila para editar</div>
         <div class="table-wrap">
@@ -659,12 +706,14 @@ async function renderPlanilla() {
           </table>
         </div>
       </div>
+      <div id="desgloseAnchor"></div>
+      <div class="stat-grid" id="planillaStatsDesglose"></div>
       <div class="card">
         <div class="card-title">Desglose mensual</div>
         <div class="field" style="max-width:220px"><label>Mes</label><input class="input" type="month" id="periodoSelect" value="${currentPeriodo()}"></div>
         <div class="table-wrap">
           <table class="data">
-            <thead><tr><th>Nombre</th><th>Base</th><th>Incentivo</th><th>Bonificación</th><th>Horas extra</th><th>Comisiones</th><th>Total</th><th></th></tr></thead>
+            <thead><tr><th>Nombre</th><th>Base</th><th>Incentivo</th><th>Bonificación</th><th>Horas extra</th><th>Comisiones</th><th>Débito IGSS</th><th>Total</th><th></th></tr></thead>
             <tbody id="desgloseTableBody"></tbody>
           </table>
         </div>
@@ -672,13 +721,19 @@ async function renderPlanilla() {
       </div>
     `;
 
-    drawPlanillaTable(root, colaboradores, compById, "");
+    let empresaActual = "";
+    drawPlanillaTable(root, colaboradores, compById, empresaActual);
     document.getElementById("empresaFilter").addEventListener("change", (e) => {
-      drawPlanillaTable(root, colaboradores, compById, e.target.value);
+      empresaActual = e.target.value;
+      drawPlanillaTable(root, colaboradores, compById, empresaActual);
+      redrawDesglose();
+    });
+    document.getElementById("irADesgloseBtn").addEventListener("click", () => {
+      document.getElementById("desgloseAnchor").scrollIntoView({ behavior: "smooth" });
     });
 
     const periodoInput = document.getElementById("periodoSelect");
-    const redrawDesglose = () => drawDesgloseMensual(colaboradores, periodoInput.value);
+    const redrawDesglose = () => drawDesgloseMensual(colaboradores, periodoInput.value, empresaActual);
     await redrawDesglose();
     periodoInput.addEventListener("change", redrawDesglose);
   } catch (err) {
@@ -686,18 +741,21 @@ async function renderPlanilla() {
   }
 }
 
-async function drawDesgloseMensual(colaboradores, periodo) {
+async function drawDesgloseMensual(colaboradores, periodo, empresaFiltro) {
   const tbody = document.getElementById("desgloseTableBody");
   tbody.innerHTML = `<tr><td colspan="7" class="empty-state">Cargando…</td></tr>`;
-  const activos = colaboradores.filter((p) => p.activo);
-  const [planillas, compensaciones, cierres] = await Promise.all([
+  const activos = colaboradores.filter((p) => p.activo && (!empresaFiltro || (p.empresa || "Sin empresa") === empresaFiltro));
+  const [planillas, compensaciones, cierres, suspensiones] = await Promise.all([
     api.listPlanillaMensual(periodo),
     api.listCompensaciones(),
     Promise.all(activos.map((p) => api.getCierreHorasExtra(p.id, periodo))),
+    api.listSuspensionesIgss(),
   ]);
   const planById = Object.fromEntries(planillas.map((p) => [p.colaborador_id, p]));
   const compById = Object.fromEntries(compensaciones.map((c) => [c.colaborador_id, c]));
   const cierreById = Object.fromEntries(activos.map((p, i) => [p.id, cierres[i]]));
+  const suspensionesPorColaborador = {};
+  suspensiones.forEach((s) => (suspensionesPorColaborador[s.colaborador_id] ||= []).push(s));
 
   const rows = activos
     .map((p) => {
@@ -710,7 +768,8 @@ async function drawDesgloseMensual(colaboradores, periodo) {
       const bonificacion = plan ? Number(plan.bonificacion || 0) : Number(comp?.bonificacion_mensual || 0);
       const comisiones = p.aplica_comisiones ? Number(plan?.comisiones || 0) : 0;
       const horasExtraMonto = Number(cierreById[p.id]?.monto || 0);
-      const total = salarioBase + incentivo + bonificacion + comisiones + horasExtraMonto;
+      const { diasDebito, monto: debitoIgss } = calcularDebitoIgss(suspensionesPorColaborador[p.id], periodo, salarioBase);
+      const total = salarioBase + incentivo + bonificacion + comisiones + horasExtraMonto - debitoIgss;
       return `
         <tr data-edit-mensual="${p.id}" style="cursor:pointer">
           <td>${escapeHtml(p.full_name)}</td>
@@ -719,6 +778,7 @@ async function drawDesgloseMensual(colaboradores, periodo) {
           <td>${fmtMoney(bonificacion)}</td>
           <td>${fmtMoney(horasExtraMonto)}</td>
           <td>${p.aplica_comisiones ? fmtMoney(comisiones) : "—"}</td>
+          <td>${debitoIgss > 0 ? `-${fmtMoney(debitoIgss)} (${diasDebito}d)` : "—"}</td>
           <td>${fmtMoney(total)}</td>
           <td><button type="button" class="btn btn-ghost btn-sm" data-recibo="${p.id}">Recibo</button></td>
         </tr>
@@ -731,7 +791,7 @@ async function drawDesgloseMensual(colaboradores, periodo) {
     tr.addEventListener("click", (e) => {
       if (e.target.closest("[data-recibo]")) return;
       const p = activos.find((c) => c.id === tr.dataset.editMensual);
-      openEditPlanillaMensual(p, planById[p.id], periodo, () => drawDesgloseMensual(colaboradores, periodo));
+      openEditPlanillaMensual(p, planById[p.id], periodo, () => drawDesgloseMensual(colaboradores, periodo, empresaFiltro));
     });
   });
 
@@ -742,12 +802,15 @@ async function drawDesgloseMensual(colaboradores, periodo) {
       const plan = planById[p.id];
       const comp = compById[p.id];
       const salarioBaseRecibo = Number(comp?.salario_mensual || 0);
+      const { diasDebito, monto: debitoIgssSuspension } = calcularDebitoIgss(suspensionesPorColaborador[p.id], periodo, salarioBaseRecibo);
       openReciboModal(p, periodo, {
         salarioBase: salarioBaseRecibo,
         bonificacion: plan ? Number(plan.bonificacion || 0) : Number(comp?.bonificacion_mensual || 0),
         comisiones: p.aplica_comisiones ? Number(plan?.comisiones || 0) : 0,
         horasExtraMonto: Number(cierreById[p.id]?.monto || 0),
         igssCalculado: calcularIgss(salarioBaseRecibo, p.jubilado),
+        debitoIgssSuspension,
+        diasSuspendidoIgss: diasDebito,
       });
     });
   });
@@ -933,113 +996,55 @@ async function saldoVacaciones(colaboradorId) {
   return { saldo: otorgados - tomados, otorgados, tomados, ajustes, solicitudes };
 }
 
+let ausenciasSubTab = "vacaciones";
+
+function motivoVacacionesFieldHtml(valorActual) {
+  const esOtro = valorActual && !MOTIVOS_VACACIONES.includes(valorActual);
+  return `
+    <div class="field"><label>Motivo</label>
+      <select class="select" name="motivo" id="motivoSelect" required>
+        ${MOTIVOS_VACACIONES.map((m) => `<option value="${escapeHtml(m)}" ${(esOtro ? "Otros" : valorActual) === m ? "selected" : ""}>${escapeHtml(m)}</option>`).join("")}
+      </select>
+    </div>
+    <div class="field" id="motivoOtroWrap" style="display:${esOtro ? "block" : "none"}">
+      <label>Especifica el motivo</label>
+      <input class="input" name="motivo_otro" value="${escapeHtml(esOtro ? valorActual : "")}">
+    </div>
+  `;
+}
+
+function attachMotivoVacacionesToggle(form) {
+  form.querySelector("#motivoSelect").addEventListener("change", (e) => {
+    form.querySelector("#motivoOtroWrap").style.display = e.target.value === "Otros" ? "block" : "none";
+  });
+}
+
+function motivoVacacionesValor(f) {
+  return f.get("motivo") === "Otros" ? f.get("motivo_otro") || "Otros" : f.get("motivo");
+}
+
 async function renderVacaciones() {
   const root = renderShell(`<div class="empty-state">Cargando…</div>`, "#/vacaciones");
   const isRrhh = profile.role === "rrhh";
 
   try {
     if (isRrhh) {
-      const [pendientes, colaboradores] = await Promise.all([
-        api.listSolicitudesVacaciones().then((all) => all.filter((s) => s.estado === "pendiente")),
-        api.listProfiles(),
-      ]);
       root.innerHTML = `
-        <div class="card">
-          <div class="card-title">Solicitudes pendientes</div>
-          ${
-            pendientes.length
-              ? pendientes
-                  .map(
-                    (s) => `
-              <div class="list-row">
-                <div class="list-row-main">
-                  <div class="list-row-title">${escapeHtml(s.colaborador?.full_name || "—")}</div>
-                  <div class="list-row-sub">${fmtDate(s.fecha_inicio)} → ${fmtDate(s.fecha_fin)} · ${s.dias_habiles} día(s) · ${escapeHtml(s.motivo || "sin motivo")}</div>
-                </div>
-                <div style="display:flex;gap:6px">
-                  <button class="btn btn-green btn-sm" data-approve="${s.id}">Aprobar</button>
-                  <button class="btn btn-danger-outline btn-sm" data-reject="${s.id}">Rechazar</button>
-                </div>
-              </div>`
-                  )
-                  .join("")
-              : `<div class="empty-state">No hay solicitudes pendientes.</div>`
-          }
+        <div class="tabs" style="margin-bottom:14px">
+          <button class="tab ${ausenciasSubTab === "vacaciones" ? "active" : ""}" data-subtab="vacaciones">Vacaciones</button>
+          <button class="tab ${ausenciasSubTab === "igss" ? "active" : ""}" data-subtab="igss">Suspensiones IGSS</button>
         </div>
-        <div class="card">
-          <div class="card-title">Saldo por colaborador</div>
-          <div class="field"><select class="select" id="colabSelect"><option value="">Selecciona un colaborador…</option>
-            ${colaboradores.map((c) => `<option value="${c.id}">${escapeHtml(c.full_name)}</option>`).join("")}
-          </select></div>
-          <div id="colabDetail"></div>
-        </div>
+        <div id="ausenciasSubHost"></div>
       `;
-
-      root.querySelectorAll("[data-approve]").forEach((btn) =>
-        btn.addEventListener("click", async () => {
-          try {
-            await api.resolverSolicitudVacaciones(btn.dataset.approve, "aprobado", null, profile.id);
-            toast("Solicitud aprobada.");
-            renderVacaciones();
-          } catch (err) {
-            handleErr(err);
-          }
+      root.querySelectorAll("[data-subtab]").forEach((btn) =>
+        btn.addEventListener("click", () => {
+          ausenciasSubTab = btn.dataset.subtab;
+          renderVacaciones();
         })
       );
-      root.querySelectorAll("[data-reject]").forEach((btn) =>
-        btn.addEventListener("click", async () => {
-          try {
-            await api.resolverSolicitudVacaciones(btn.dataset.reject, "rechazado", null, profile.id);
-            toast("Solicitud rechazada.");
-            renderVacaciones();
-          } catch (err) {
-            handleErr(err);
-          }
-        })
-      );
-
-      document.getElementById("colabSelect").addEventListener("change", async (e) => {
-        const id = e.target.value;
-        const host = document.getElementById("colabDetail");
-        if (!id) {
-          host.innerHTML = "";
-          return;
-        }
-        host.innerHTML = `<div class="empty-state">Cargando…</div>`;
-        const { saldo, solicitudes } = await saldoVacaciones(id);
-        host.innerHTML = `
-          <div class="stat-grid" style="margin-top:14px">
-            <div class="stat-tile"><div class="stat-value">${saldo}</div><div class="stat-label">Días disponibles</div></div>
-          </div>
-          <form id="ajusteForm" class="row-2" style="align-items:end">
-            <div class="field"><label>Otorgar/quitar días</label><input class="input" type="number" step="0.5" name="dias" required></div>
-            <div class="field"><label>Motivo</label><input class="input" name="motivo" placeholder="Ej. aniversario laboral" required></div>
-            <button class="btn btn-primary" style="grid-column:1/-1" type="submit">Registrar ajuste</button>
-          </form>
-          <div class="card-title" style="margin-top:14px">Historial de solicitudes</div>
-          ${
-            solicitudes.length
-              ? solicitudes
-                  .map(
-                    (s) => `<div class="list-row"><div class="list-row-main"><div class="list-row-title">${fmtDate(s.fecha_inicio)} → ${fmtDate(s.fecha_fin)}</div><div class="list-row-sub">${s.dias_habiles} día(s)</div></div>${pillEstado(s.estado)}</div>`
-                  )
-                  .join("")
-              : `<div class="empty-state">Sin solicitudes.</div>`
-          }
-        `;
-        document.getElementById("ajusteForm").addEventListener("submit", async (e) => {
-          e.preventDefault();
-          const f = new FormData(e.target);
-          try {
-            await api.crearAjusteVacaciones(id, Number(f.get("dias")), f.get("motivo"), profile.id);
-            toast("Ajuste registrado.");
-            e.target.reset();
-            document.getElementById("colabSelect").dispatchEvent(new Event("change"));
-          } catch (err) {
-            handleErr(err);
-          }
-        });
-      });
+      const subHost = document.getElementById("ausenciasSubHost");
+      if (ausenciasSubTab === "igss") await renderSuspensionesIgssAdmin(subHost);
+      else await renderVacacionesAdmin(subHost);
     } else {
       const { saldo, solicitudes } = await saldoVacaciones(profile.id);
       root.innerHTML = `
@@ -1053,7 +1058,7 @@ async function renderVacaciones() {
               <div class="field"><label>Desde</label><input class="input" type="date" name="fecha_inicio" required></div>
               <div class="field"><label>Hasta</label><input class="input" type="date" name="fecha_fin" required></div>
             </div>
-            <div class="field"><label>Motivo (opcional)</label><input class="input" name="motivo"></div>
+            ${motivoVacacionesFieldHtml()}
             <div class="field hint" id="diasPreview"></div>
             <button class="btn btn-primary btn-block" type="submit">Enviar solicitud</button>
           </form>
@@ -1080,6 +1085,7 @@ async function renderVacaciones() {
       `;
 
       const form = document.getElementById("solForm");
+      attachMotivoVacacionesToggle(form);
       const updatePreview = () => {
         const fi = form.fecha_inicio.value;
         const ff = form.fecha_fin.value;
@@ -1096,7 +1102,7 @@ async function renderVacaciones() {
         const dias_habiles = businessDaysBetween(fecha_inicio, fecha_fin);
         if (dias_habiles <= 0) return toast("El rango de fechas no es válido.", true);
         try {
-          await api.crearSolicitudVacaciones(profile.id, { fecha_inicio, fecha_fin, dias_habiles, motivo: f.get("motivo") || null });
+          await api.crearSolicitudVacaciones(profile.id, { fecha_inicio, fecha_fin, dias_habiles, motivo: motivoVacacionesValor(f) });
           toast("Solicitud enviada.");
           renderVacaciones();
         } catch (err) {
@@ -1119,6 +1125,286 @@ async function renderVacaciones() {
   } catch (err) {
     handleErr(err);
   }
+}
+
+async function renderVacacionesAdmin(root) {
+  const [pendientes, colaboradores, todosAjustes, todasSolicitudes] = await Promise.all([
+    api.listSolicitudesVacaciones().then((all) => all.filter((s) => s.estado === "pendiente")),
+    api.listProfiles(),
+    api.listVacacionesAjustes(),
+    api.listSolicitudesVacaciones(),
+  ]);
+
+  const otorgadosPorColab = {};
+  todosAjustes.forEach((a) => (otorgadosPorColab[a.colaborador_id] = (otorgadosPorColab[a.colaborador_id] || 0) + Number(a.dias)));
+  const tomadosPorColab = {};
+  todasSolicitudes
+    .filter((s) => s.estado === "aprobado")
+    .forEach((s) => (tomadosPorColab[s.colaborador_id] = (tomadosPorColab[s.colaborador_id] || 0) + Number(s.dias_habiles)));
+
+  const empresas = [...new Set(colaboradores.map((p) => p.empresa || "Sin empresa"))].sort();
+
+  root.innerHTML = `
+    <div class="card">
+      <div class="card-title">Solicitudes pendientes</div>
+      ${
+        pendientes.length
+          ? pendientes
+              .map(
+                (s) => `
+          <div class="list-row">
+            <div class="list-row-main">
+              <div class="list-row-title">${escapeHtml(s.colaborador?.full_name || "—")}</div>
+              <div class="list-row-sub">${fmtDate(s.fecha_inicio)} → ${fmtDate(s.fecha_fin)} · ${s.dias_habiles} día(s) · ${escapeHtml(s.motivo || "sin motivo")}</div>
+            </div>
+            <div style="display:flex;gap:6px">
+              <button class="btn btn-green btn-sm" data-approve="${s.id}">Aprobar</button>
+              <button class="btn btn-danger-outline btn-sm" data-reject="${s.id}">Rechazar</button>
+            </div>
+          </div>`
+              )
+              .join("")
+          : `<div class="empty-state">No hay solicitudes pendientes.</div>`
+      }
+    </div>
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:10px">
+        <div class="card-title" style="margin:0">Vacaciones pendientes por colaborador</div>
+        <div class="field" style="margin:0;min-width:200px">
+          <select class="select" id="empresaResumenVacaciones"><option value="">Todas las empresas</option>
+            ${empresas.map((e) => `<option value="${escapeHtml(e)}">${escapeHtml(e)}</option>`).join("")}
+          </select>
+        </div>
+      </div>
+      <div id="resumenVacacionesHost"></div>
+    </div>
+    <div class="card">
+      <div class="card-title">Saldo por colaborador</div>
+      <div class="field"><select class="select" id="colabSelect"><option value="">Selecciona un colaborador…</option>
+        ${colaboradores.map((c) => `<option value="${c.id}">${escapeHtml(c.full_name)}</option>`).join("")}
+      </select></div>
+      <div id="colabDetail"></div>
+    </div>
+  `;
+
+  const drawResumen = () => {
+    const empresaFiltro = document.getElementById("empresaResumenVacaciones").value;
+    const filas = colaboradores
+      .filter((p) => p.activo && (!empresaFiltro || (p.empresa || "Sin empresa") === empresaFiltro))
+      .map((p) => ({
+        p,
+        saldo: (otorgadosPorColab[p.id] || 0) - (tomadosPorColab[p.id] || 0),
+      }))
+      .sort((a, b) => b.saldo - a.saldo);
+    document.getElementById("resumenVacacionesHost").innerHTML = filas.length
+      ? `<div class="table-wrap"><table class="data">
+          <thead><tr><th>Colaborador</th><th>Empresa</th><th>Días pendientes</th></tr></thead>
+          <tbody>${filas.map((f) => `<tr><td>${escapeHtml(f.p.full_name)}</td><td>${escapeHtml(f.p.empresa || "—")}</td><td>${f.saldo}</td></tr>`).join("")}</tbody>
+        </table></div>`
+      : `<div class="empty-state">Sin colaboradores.</div>`;
+  };
+  drawResumen();
+  document.getElementById("empresaResumenVacaciones").addEventListener("change", drawResumen);
+
+  root.querySelectorAll("[data-approve]").forEach((btn) =>
+    btn.addEventListener("click", async () => {
+      try {
+        await api.resolverSolicitudVacaciones(btn.dataset.approve, "aprobado", null, profile.id);
+        toast("Solicitud aprobada.");
+        renderVacaciones();
+      } catch (err) {
+        handleErr(err);
+      }
+    })
+  );
+  root.querySelectorAll("[data-reject]").forEach((btn) =>
+    btn.addEventListener("click", async () => {
+      try {
+        await api.resolverSolicitudVacaciones(btn.dataset.reject, "rechazado", null, profile.id);
+        toast("Solicitud rechazada.");
+        renderVacaciones();
+      } catch (err) {
+        handleErr(err);
+      }
+    })
+  );
+
+  document.getElementById("colabSelect").addEventListener("change", async (e) => {
+    const id = e.target.value;
+    const host = document.getElementById("colabDetail");
+    if (!id) {
+      host.innerHTML = "";
+      return;
+    }
+    host.innerHTML = `<div class="empty-state">Cargando…</div>`;
+    const { saldo, solicitudes } = await saldoVacaciones(id);
+    host.innerHTML = `
+      <div class="stat-grid" style="margin-top:14px">
+        <div class="stat-tile"><div class="stat-value">${saldo}</div><div class="stat-label">Días disponibles</div></div>
+      </div>
+      <form id="ajusteForm" class="row-2" style="align-items:end">
+        <div class="field"><label>Otorgar/quitar días</label><input class="input" type="number" step="0.5" name="dias" required></div>
+        <div class="field"><label>Motivo</label><input class="input" name="motivo" placeholder="Ej. aniversario laboral" required></div>
+        <button class="btn btn-primary" style="grid-column:1/-1" type="submit">Registrar ajuste</button>
+      </form>
+      <div class="card-title" style="margin-top:14px">Historial de solicitudes</div>
+      ${
+        solicitudes.length
+          ? solicitudes
+              .map(
+                (s) => `<div class="list-row"><div class="list-row-main"><div class="list-row-title">${fmtDate(s.fecha_inicio)} → ${fmtDate(s.fecha_fin)}</div><div class="list-row-sub">${s.dias_habiles} día(s)</div></div>${pillEstado(s.estado)}</div>`
+              )
+              .join("")
+          : `<div class="empty-state">Sin solicitudes.</div>`
+      }
+    `;
+    document.getElementById("ajusteForm").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const f = new FormData(e.target);
+      try {
+        await api.crearAjusteVacaciones(id, Number(f.get("dias")), f.get("motivo"), profile.id);
+        toast("Ajuste registrado.");
+        e.target.reset();
+        document.getElementById("colabSelect").dispatchEvent(new Event("change"));
+      } catch (err) {
+        handleErr(err);
+      }
+    });
+  });
+}
+
+async function renderSuspensionesIgssAdmin(root) {
+  const [suspensiones, colaboradores] = await Promise.all([api.listSuspensionesIgss(), api.listProfiles()]);
+
+  root.innerHTML = `
+    <div class="card">
+      <div class="card-title">Registrar visita / suspensión IGSS</div>
+      <form id="suspForm">
+        <div class="field"><label>Colaborador</label>
+          <select class="select" name="colaborador_id" required><option value="">Selecciona…</option>
+            ${colaboradores.map((c) => `<option value="${c.id}">${escapeHtml(c.full_name)}</option>`).join("")}
+          </select>
+        </div>
+        <div class="row-2">
+          <div class="field"><label>Fecha de la visita al IGSS</label><input class="input" type="date" name="fecha_visita" value="${todayISO()}" required></div>
+          <div class="field"><label>Motivo</label><input class="input" name="motivo" placeholder="Ej. consulta médica" required></div>
+        </div>
+        <label style="display:flex;align-items:center;gap:8px;margin-bottom:16px;font-size:13px;color:var(--text-dim)">
+          <input type="checkbox" name="suspendido" id="suspendidoCheck"> Lo suspendieron
+        </label>
+        <div class="row-2" id="suspFechasWrap" style="display:none">
+          <div class="field"><label>Desde</label><input class="input" type="date" name="fecha_inicio"></div>
+          <div class="field"><label>Hasta</label><input class="input" type="date" name="fecha_fin"></div>
+        </div>
+        <p class="field hint">Recuerda: la empresa paga el primer día de la suspensión y el IGSS paga el resto — el sistema descuenta automáticamente esos días del salario base en Planilla del mes que corresponda.</p>
+        <button class="btn btn-primary btn-block" type="submit">Guardar</button>
+      </form>
+    </div>
+    <div class="card">
+      <div class="card-title">Historial de suspensiones IGSS</div>
+      <div class="table-wrap">
+        <table class="data">
+          <thead><tr><th>Colaborador</th><th>Fecha visita</th><th>Motivo</th><th>Suspendido</th><th>Desde</th><th>Hasta</th><th></th></tr></thead>
+          <tbody>
+            ${suspensiones
+              .map(
+                (s) => `<tr>
+                  <td>${escapeHtml(s.colaborador?.full_name || "—")}</td>
+                  <td>${fmtDate(s.fecha_visita)}</td>
+                  <td>${escapeHtml(s.motivo)}</td>
+                  <td>${s.suspendido ? "Sí" : "No"}</td>
+                  <td>${s.fecha_inicio ? fmtDate(s.fecha_inicio) : "—"}</td>
+                  <td>${s.fecha_fin ? fmtDate(s.fecha_fin) : "—"}</td>
+                  <td><button class="btn btn-ghost btn-sm" data-edit-susp="${s.id}">Editar</button></td>
+                </tr>`
+              )
+              .join("")}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  `;
+
+  const form = document.getElementById("suspForm");
+  form.querySelector("#suspendidoCheck").addEventListener("change", (e) => {
+    document.getElementById("suspFechasWrap").style.display = e.target.checked ? "grid" : "none";
+  });
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const f = new FormData(form);
+    const suspendido = f.get("suspendido") === "on";
+    if (suspendido && (!f.get("fecha_inicio") || !f.get("fecha_fin"))) {
+      return toast("Completa el rango de fechas de la suspensión.", true);
+    }
+    try {
+      await api.crearSuspensionIgss(
+        {
+          colaborador_id: f.get("colaborador_id"),
+          motivo: f.get("motivo"),
+          fecha_visita: f.get("fecha_visita"),
+          suspendido,
+          fecha_inicio: suspendido ? f.get("fecha_inicio") : null,
+          fecha_fin: suspendido ? f.get("fecha_fin") : null,
+        },
+        profile.id
+      );
+      toast("Registrado.");
+      renderVacaciones();
+    } catch (err) {
+      handleErr(err);
+    }
+  });
+
+  root.querySelectorAll("[data-edit-susp]").forEach((btn) =>
+    btn.addEventListener("click", () => {
+      const s = suspensiones.find((x) => x.id === btn.dataset.editSusp);
+      openEditSuspensionIgss(s);
+    })
+  );
+}
+
+function openEditSuspensionIgss(s) {
+  const modal = openModal(`Editar suspensión — ${s.colaborador?.full_name || ""}`, `
+    <form id="editSuspForm">
+      <div class="row-2">
+        <div class="field"><label>Fecha de la visita al IGSS</label><input class="input" type="date" name="fecha_visita" value="${s.fecha_visita || ""}" required></div>
+        <div class="field"><label>Motivo</label><input class="input" name="motivo" value="${escapeHtml(s.motivo || "")}" required></div>
+      </div>
+      <label style="display:flex;align-items:center;gap:8px;margin-bottom:16px;font-size:13px;color:var(--text-dim)">
+        <input type="checkbox" name="suspendido" id="editSuspendidoCheck" ${s.suspendido ? "checked" : ""}> Lo suspendieron
+      </label>
+      <div class="row-2" id="editSuspFechasWrap" style="display:${s.suspendido ? "grid" : "none"}">
+        <div class="field"><label>Desde</label><input class="input" type="date" name="fecha_inicio" value="${s.fecha_inicio || ""}"></div>
+        <div class="field"><label>Hasta</label><input class="input" type="date" name="fecha_fin" value="${s.fecha_fin || ""}"></div>
+      </div>
+      <button class="btn btn-primary btn-block" type="submit">Guardar cambios</button>
+    </form>
+  `);
+  modal.querySelector("#editSuspendidoCheck").addEventListener("change", (e) => {
+    modal.querySelector("#editSuspFechasWrap").style.display = e.target.checked ? "grid" : "none";
+  });
+  modal.querySelector("#editSuspForm").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const f = new FormData(e.target);
+    const suspendido = f.get("suspendido") === "on";
+    if (suspendido && (!f.get("fecha_inicio") || !f.get("fecha_fin"))) {
+      return toast("Completa el rango de fechas de la suspensión.", true);
+    }
+    try {
+      await api.actualizarSuspensionIgss(s.id, {
+        fecha_visita: f.get("fecha_visita"),
+        motivo: f.get("motivo"),
+        suspendido,
+        fecha_inicio: suspendido ? f.get("fecha_inicio") : null,
+        fecha_fin: suspendido ? f.get("fecha_fin") : null,
+      });
+      toast("Actualizado.");
+      modal.remove();
+      renderVacaciones();
+    } catch (err) {
+      handleErr(err);
+    }
+  });
 }
 
 // ============================================================================
@@ -2304,8 +2590,9 @@ function reciboHtml(colaborador, periodo, datos) {
   const { header, footer } = cartaHeaderFooterHtml(letterhead, colaborador.empresa);
   const empresaTexto = letterhead ? letterhead.razonSocial : colaborador.empresa || "Grupo IMISA";
 
+  const debitoIgssSuspension = datos.debitoIgssSuspension || 0;
   const totalIngresos = datos.salarioBase + datos.horasExtraMonto + datos.comisiones + datos.vacaciones;
-  const totalDeducciones = datos.anticipo + datos.igss + datos.prestamos + datos.retencionIsr + datos.otros;
+  const totalDeducciones = datos.anticipo + datos.igss + datos.prestamos + datos.retencionIsr + datos.otros + debitoIgssSuspension;
   const liquido = totalIngresos + datos.bonificacion - totalDeducciones;
 
   const fila = (desc, ingreso, otroIngreso, deduccion) => `
@@ -2343,6 +2630,7 @@ function reciboHtml(colaborador, periodo, datos) {
           ${fila("IGSS", null, null, datos.igss)}
           ${fila("Préstamos o anticipos", null, null, datos.prestamos)}
           ${fila("Retención ISR", null, null, datos.retencionIsr)}
+          ${debitoIgssSuspension > 0 ? fila(`Débito por suspensión IGSS (${datos.diasSuspendidoIgss || ""} día(s))`, null, null, debitoIgssSuspension) : ""}
           ${fila("Otros", null, null, datos.otros)}
         </tbody>
         <tfoot>
@@ -2378,6 +2666,11 @@ function openReciboModal(colaborador, periodo, ingresosAuto) {
         <div class="field"><label>Vacaciones (Q)</label><input class="input" type="number" step="0.01" min="0" name="vacaciones" value="0"></div>
       </div>
       <p class="field hint">Ingresos automáticos: salario base ${fmtMoney(ingresosAuto.salarioBase)}, horas extra ${fmtMoney(ingresosAuto.horasExtraMonto)}, comisiones ${fmtMoney(ingresosAuto.comisiones)}, bonificación ${fmtMoney(ingresosAuto.bonificacion)}.</p>
+      ${
+        ingresosAuto.debitoIgssSuspension > 0
+          ? `<p class="field hint" style="color:#E4665F">Se detectó una suspensión IGSS este mes: se debitan automáticamente ${fmtMoney(ingresosAuto.debitoIgssSuspension)} (${ingresosAuto.diasSuspendidoIgss} día(s)).</p>`
+          : ""
+      }
       <div class="card-title" style="font-size:13px;margin-top:6px">Deducciones (completa lo que aplique)</div>
       <div class="row-2">
         <div class="field"><label>Anticipo 1ra. quincena</label><input class="input" type="number" step="0.01" min="0" name="anticipo" value="0"></div>
@@ -2409,7 +2702,7 @@ function openReciboModal(colaborador, periodo, ingresosAuto) {
       otros: Number(f.get("otros") || 0),
     };
     const totalIngresos = datos.salarioBase + datos.horasExtraMonto + datos.comisiones + datos.vacaciones + datos.bonificacion;
-    const totalDeducciones = datos.anticipo + datos.igss + datos.prestamos + datos.retencionIsr + datos.otros;
+    const totalDeducciones = datos.anticipo + datos.igss + datos.prestamos + datos.retencionIsr + datos.otros + (datos.debitoIgssSuspension || 0);
     if (totalDeducciones > totalIngresos) {
       return toast("Las deducciones superan los ingresos — revisa los montos antes de generar el recibo.", true);
     }
