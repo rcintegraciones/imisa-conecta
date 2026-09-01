@@ -139,6 +139,8 @@ main.view { flex: 1; width: 100%; max-width: 1320px; margin: 0 auto; padding: 18
 .pill-rechazado { background: rgba(201,67,60,.14); color: #B23A34; }
 .pill-activo { background: rgba(31,138,76,.14); color: #1B7A43; }
 .pill-inactivo { background: rgba(0,0,0,.08); color: var(--text-mute); }
+.pill-alerta { background: rgba(201,138,44,.18); color: #A06A1E; }
+.pill-urgente { background: rgba(228,102,95,.18); color: #B23A34; }
 
 /* ---------- lists / tables ---------- */
 .list-row {

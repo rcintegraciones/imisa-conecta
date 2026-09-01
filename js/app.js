@@ -1052,6 +1052,15 @@ function openEditColaborador(p, comp, todosColaboradores) {
 // Vista: Vacaciones
 // ============================================================================
 
+// Alerta cuando el saldo de vacaciones pendientes se acumula demasiado:
+// 20+ días es una señal de atención, 40+ es urgente (se está acumulando
+// pasivo laboral, hay que coordinar que la persona goce vacaciones).
+function alertaVacacionesHtml(saldo) {
+  if (saldo > 40) return ` <span class="pill pill-urgente">Urgente</span>`;
+  if (saldo >= 20) return ` <span class="pill pill-alerta">Alerta</span>`;
+  return "";
+}
+
 async function saldoVacaciones(colaboradorId) {
   const [ajustes, solicitudes] = await Promise.all([
     api.listVacacionesAjustes(colaboradorId),
@@ -1115,7 +1124,7 @@ async function renderVacaciones() {
       const { saldo, solicitudes } = await saldoVacaciones(profile.id);
       root.innerHTML = `
         <div class="stat-grid">
-          <div class="stat-tile"><div class="stat-value">${saldo}</div><div class="stat-label">Días disponibles</div></div>
+          <div class="stat-tile"><div class="stat-value">${saldo}${alertaVacacionesHtml(saldo)}</div><div class="stat-label">Días disponibles</div></div>
         </div>
         <div class="card">
           <div class="card-title">Solicitar vacaciones</div>
@@ -1265,7 +1274,7 @@ async function renderVacacionesAdmin(root) {
     document.getElementById("resumenVacacionesHost").innerHTML = filas.length
       ? `<div class="table-wrap"><table class="data">
           <thead><tr><th>Colaborador</th><th>Empresa</th><th>Días pendientes</th></tr></thead>
-          <tbody>${filas.map((f) => `<tr><td>${escapeHtml(f.p.full_name)}</td><td>${escapeHtml(f.p.empresa || "—")}</td><td>${f.saldo}</td></tr>`).join("")}</tbody>
+          <tbody>${filas.map((f) => `<tr><td>${escapeHtml(f.p.full_name)}</td><td>${escapeHtml(f.p.empresa || "—")}</td><td>${f.saldo}${alertaVacacionesHtml(f.saldo)}</td></tr>`).join("")}</tbody>
         </table></div>`
       : `<div class="empty-state">Sin colaboradores.</div>`;
   };
@@ -1306,7 +1315,7 @@ async function renderVacacionesAdmin(root) {
     const { saldo, solicitudes } = await saldoVacaciones(id);
     host.innerHTML = `
       <div class="stat-grid" style="margin-top:14px">
-        <div class="stat-tile"><div class="stat-value">${saldo}</div><div class="stat-label">Días disponibles</div></div>
+        <div class="stat-tile"><div class="stat-value">${saldo}${alertaVacacionesHtml(saldo)}</div><div class="stat-label">Días disponibles</div></div>
       </div>
       <form id="ajusteForm" class="row-2" style="align-items:end">
         <div class="field"><label>Otorgar/quitar días</label><input class="input" type="number" step="0.5" name="dias" required></div>
