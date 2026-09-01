@@ -1273,10 +1273,17 @@ async function renderVacacionesAdmin(root) {
       .sort((a, b) => b.saldo - a.saldo);
     document.getElementById("resumenVacacionesHost").innerHTML = filas.length
       ? `<div class="table-wrap"><table class="data">
-          <thead><tr><th>Colaborador</th><th>Empresa</th><th>Días pendientes</th></tr></thead>
-          <tbody>${filas.map((f) => `<tr><td>${escapeHtml(f.p.full_name)}</td><td>${escapeHtml(f.p.empresa || "—")}</td><td>${f.saldo}${alertaVacacionesHtml(f.saldo)}</td></tr>`).join("")}</tbody>
+          <thead><tr><th>Colaborador</th><th>Empresa</th><th>Días pendientes</th><th></th></tr></thead>
+          <tbody>${filas.map((f) => `<tr><td>${escapeHtml(f.p.full_name)}</td><td>${escapeHtml(f.p.empresa || "—")}</td><td>${f.saldo}${alertaVacacionesHtml(f.saldo)}</td><td><button type="button" class="btn btn-ghost btn-sm" data-recibo-vacaciones="${f.p.id}">Recibo</button></td></tr>`).join("")}</tbody>
         </table></div>`
       : `<div class="empty-state">Sin colaboradores.</div>`;
+    document.getElementById("resumenVacacionesHost").querySelectorAll("[data-recibo-vacaciones]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const p = colaboradores.find((c) => c.id === btn.dataset.reciboVacaciones);
+        const solicitudesDe = todasSolicitudes.filter((s) => s.colaborador_id === p.id && s.estado === "aprobado");
+        imprimirReciboVacaciones(p, solicitudesDe);
+      });
+    });
   };
   drawResumen();
   document.getElementById("empresaResumenVacaciones").addEventListener("change", drawResumen);
@@ -1322,7 +1329,10 @@ async function renderVacacionesAdmin(root) {
         <div class="field"><label>Motivo</label><input class="input" name="motivo" placeholder="Ej. aniversario laboral" required></div>
         <button class="btn btn-primary" style="grid-column:1/-1" type="submit">Registrar ajuste</button>
       </form>
-      <div class="card-title" style="margin-top:14px">Historial de solicitudes</div>
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-top:14px">
+        <div class="card-title" style="margin:0">Historial de solicitudes</div>
+        <button type="button" class="btn btn-ghost btn-sm" id="reciboVacacionesColabBtn">Recibo</button>
+      </div>
       ${
         solicitudes.length
           ? solicitudes
@@ -1333,6 +1343,10 @@ async function renderVacacionesAdmin(root) {
           : `<div class="empty-state">Sin solicitudes.</div>`
       }
     `;
+    document.getElementById("reciboVacacionesColabBtn").addEventListener("click", () => {
+      const p = colaboradores.find((c) => c.id === id);
+      imprimirReciboVacaciones(p, solicitudes.filter((s) => s.estado === "aprobado"));
+    });
     document.getElementById("ajusteForm").addEventListener("submit", async (e) => {
       e.preventDefault();
       const f = new FormData(e.target);
@@ -2871,6 +2885,74 @@ function cartaLaboralHtml(colaborador) {
       ${footer}
     </div>
   `;
+}
+
+// ============================================================================
+// Recibo/listado de vacaciones tomadas (desde Ausencias > Vacaciones)
+// ============================================================================
+
+function reciboVacacionesHtml(colaborador, solicitudesAprobadas) {
+  const letterhead = getLetterhead(colaborador.empresa);
+  const { header, footer } = cartaHeaderFooterHtml(letterhead, colaborador.empresa);
+  const filas = [...solicitudesAprobadas].sort((a, b) => (a.fecha_inicio < b.fecha_inicio ? -1 : 1));
+  const totalDias = filas.reduce((s, r) => s + Number(r.dias_habiles), 0);
+
+  return `
+    <div class="print-area" style="max-width:800px;margin:0 auto;padding:40px;font-family:Arial,Helvetica,sans-serif;color:#111;background:#fff;font-size:13px">
+      ${header}
+      <h2 style="text-align:center;text-transform:uppercase;letter-spacing:.05em;font-size:16px">Listado de vacaciones tomadas</h2>
+      <p style="text-align:center;margin-top:0">${escapeHtml(colaborador.full_name)} — ${escapeHtml(colaborador.puesto || "—")}</p>
+      <table style="width:100%;border-collapse:collapse;margin-top:20px">
+        <thead>
+          <tr style="border-bottom:1px solid #999;text-align:left">
+            <th style="padding:6px 4px">Del</th>
+            <th style="padding:6px 4px">Al</th>
+            <th style="padding:6px 4px">Días hábiles</th>
+            <th style="padding:6px 4px">Motivo</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${
+            filas.length
+              ? filas
+                  .map(
+                    (r) => `
+              <tr style="border-bottom:1px solid #e5e5e5">
+                <td style="padding:6px 4px">${fmtDate(r.fecha_inicio)}</td>
+                <td style="padding:6px 4px">${fmtDate(r.fecha_fin)}</td>
+                <td style="padding:6px 4px">${r.dias_habiles}</td>
+                <td style="padding:6px 4px">${escapeHtml(r.motivo || "—")}</td>
+              </tr>`
+                  )
+                  .join("")
+              : `<tr><td colspan="4" style="padding:10px 4px;color:#666">Sin vacaciones aprobadas registradas.</td></tr>`
+          }
+        </tbody>
+        ${
+          filas.length
+            ? `<tfoot><tr style="border-top:2px solid #333;font-weight:700">
+                <td style="padding:8px 4px" colspan="2">Total</td>
+                <td style="padding:8px 4px">${totalDias}</td>
+                <td></td>
+              </tr></tfoot>`
+            : ""
+        }
+      </table>
+      <p style="margin-top:40px;font-size:11px;color:#666">Generado el ${fechaCortaEs(todayISO())} desde IMISA Conecta.</p>
+      ${footer}
+    </div>
+  `;
+}
+
+function imprimirReciboVacaciones(colaborador, solicitudesAprobadas) {
+  const win = window.open("", "_blank");
+  if (!win) {
+    toast("El navegador bloqueó la ventana. Permite ventanas emergentes e intenta de nuevo.", true);
+    return;
+  }
+  const html = reciboVacacionesHtml(colaborador, solicitudesAprobadas);
+  win.document.write(`<!DOCTYPE html><html lang="es"><head><meta charset="utf-8"><title>Vacaciones — ${escapeHtml(colaborador.full_name)}</title></head><body>${html}<script>window.onload=()=>window.print()<\/script></body></html>`);
+  win.document.close();
 }
 
 function cartaIngresosHtml(colaborador, salarioBase, bonificacion) {
