@@ -1203,11 +1203,12 @@ async function renderVacaciones() {
 }
 
 async function renderVacacionesAdmin(root) {
-  const [pendientes, colaboradores, todosAjustes, todasSolicitudes] = await Promise.all([
+  const [pendientes, colaboradores, todosAjustes, todasSolicitudes, todoHistorico] = await Promise.all([
     api.listSolicitudesVacaciones().then((all) => all.filter((s) => s.estado === "pendiente")),
     api.listProfiles(),
     api.listVacacionesAjustes(),
     api.listSolicitudesVacaciones(),
+    api.listVacacionesHistorico(),
   ]);
 
   const otorgadosPorColab = {};
@@ -1281,7 +1282,8 @@ async function renderVacacionesAdmin(root) {
       btn.addEventListener("click", () => {
         const p = colaboradores.find((c) => c.id === btn.dataset.reciboVacaciones);
         const solicitudesDe = todasSolicitudes.filter((s) => s.colaborador_id === p.id && s.estado === "aprobado");
-        imprimirReciboVacaciones(p, solicitudesDe);
+        const historicoDe = todoHistorico.filter((h) => h.colaborador_id === p.id);
+        imprimirReciboVacaciones(p, solicitudesDe, historicoDe);
       });
     });
   };
@@ -1345,7 +1347,7 @@ async function renderVacacionesAdmin(root) {
     `;
     document.getElementById("reciboVacacionesColabBtn").addEventListener("click", () => {
       const p = colaboradores.find((c) => c.id === id);
-      imprimirReciboVacaciones(p, solicitudes.filter((s) => s.estado === "aprobado"));
+      imprimirReciboVacacionesConHistorico(p, solicitudes.filter((s) => s.estado === "aprobado"));
     });
     document.getElementById("ajusteForm").addEventListener("submit", async (e) => {
       e.preventDefault();
@@ -2891,11 +2893,31 @@ function cartaLaboralHtml(colaborador) {
 // Recibo/listado de vacaciones tomadas (desde Ausencias > Vacaciones)
 // ============================================================================
 
-function reciboVacacionesHtml(colaborador, solicitudesAprobadas) {
+// Combina solicitudes aprobadas (dentro del sistema) con el histórico
+// migrado (anterior a que RRHH aprobara solicitudes aquí) en una sola lista
+// para el recibo, normalizando ambos a la misma forma {fecha_inicio,
+// fecha_fin, dias, motivo}.
+function combinarVacacionesTomadas(solicitudesAprobadas, historico) {
+  const deSolicitudes = solicitudesAprobadas.map((s) => ({
+    fecha_inicio: s.fecha_inicio,
+    fecha_fin: s.fecha_fin,
+    dias: Number(s.dias_habiles),
+    motivo: s.motivo || "—",
+  }));
+  const deHistorico = (historico || []).map((h) => ({
+    fecha_inicio: h.fecha_inicio,
+    fecha_fin: h.fecha_fin,
+    dias: Number(h.dias),
+    motivo: "Histórico",
+  }));
+  return [...deSolicitudes, ...deHistorico];
+}
+
+function reciboVacacionesHtml(colaborador, filasVacaciones) {
   const letterhead = getLetterhead(colaborador.empresa);
   const { header, footer } = cartaHeaderFooterHtml(letterhead, colaborador.empresa);
-  const filas = [...solicitudesAprobadas].sort((a, b) => (a.fecha_inicio < b.fecha_inicio ? -1 : 1));
-  const totalDias = filas.reduce((s, r) => s + Number(r.dias_habiles), 0);
+  const filas = [...filasVacaciones].sort((a, b) => (a.fecha_inicio < b.fecha_inicio ? -1 : 1));
+  const totalDias = filas.reduce((s, r) => s + Number(r.dias), 0);
 
   return `
     <div class="print-area" style="max-width:800px;margin:0 auto;padding:40px;font-family:Arial,Helvetica,sans-serif;color:#111;background:#fff;font-size:13px">
@@ -2920,12 +2942,12 @@ function reciboVacacionesHtml(colaborador, solicitudesAprobadas) {
               <tr style="border-bottom:1px solid #e5e5e5">
                 <td style="padding:6px 4px">${fmtDate(r.fecha_inicio)}</td>
                 <td style="padding:6px 4px">${fmtDate(r.fecha_fin)}</td>
-                <td style="padding:6px 4px">${r.dias_habiles}</td>
+                <td style="padding:6px 4px">${r.dias}</td>
                 <td style="padding:6px 4px">${escapeHtml(r.motivo || "—")}</td>
               </tr>`
                   )
                   .join("")
-              : `<tr><td colspan="4" style="padding:10px 4px;color:#666">Sin vacaciones aprobadas registradas.</td></tr>`
+              : `<tr><td colspan="4" style="padding:10px 4px;color:#666">Sin vacaciones registradas.</td></tr>`
           }
         </tbody>
         ${
@@ -2944,13 +2966,34 @@ function reciboVacacionesHtml(colaborador, solicitudesAprobadas) {
   `;
 }
 
-function imprimirReciboVacaciones(colaborador, solicitudesAprobadas) {
+function imprimirReciboVacaciones(colaborador, solicitudesAprobadas, historico) {
   const win = window.open("", "_blank");
   if (!win) {
     toast("El navegador bloqueó la ventana. Permite ventanas emergentes e intenta de nuevo.", true);
     return;
   }
-  const html = reciboVacacionesHtml(colaborador, solicitudesAprobadas);
+  const html = reciboVacacionesHtml(colaborador, combinarVacacionesTomadas(solicitudesAprobadas, historico));
+  win.document.write(`<!DOCTYPE html><html lang="es"><head><meta charset="utf-8"><title>Vacaciones — ${escapeHtml(colaborador.full_name)}</title></head><body>${html}<script>window.onload=()=>window.print()<\/script></body></html>`);
+  win.document.close();
+}
+
+// Igual que imprimirReciboVacaciones, pero busca el histórico primero (para
+// el botón junto a "Saldo por colaborador", donde no lo tenemos precargado).
+// Abre la ventana de inmediato (dentro del gesto del usuario) para evitar
+// que el navegador bloquee el popup, y llena el contenido después.
+async function imprimirReciboVacacionesConHistorico(colaborador, solicitudesAprobadas) {
+  const win = window.open("", "_blank");
+  if (!win) {
+    toast("El navegador bloqueó la ventana. Permite ventanas emergentes e intenta de nuevo.", true);
+    return;
+  }
+  let historico = [];
+  try {
+    historico = await api.listVacacionesHistorico(colaborador.id);
+  } catch (err) {
+    console.error(err);
+  }
+  const html = reciboVacacionesHtml(colaborador, combinarVacacionesTomadas(solicitudesAprobadas, historico));
   win.document.write(`<!DOCTYPE html><html lang="es"><head><meta charset="utf-8"><title>Vacaciones — ${escapeHtml(colaborador.full_name)}</title></head><body>${html}<script>window.onload=()=>window.print()<\/script></body></html>`);
   win.document.close();
 }

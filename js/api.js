@@ -172,6 +172,14 @@ export async function listVacacionesAjustes(colaboradorId) {
   return data;
 }
 
+export async function listVacacionesHistorico(colaboradorId) {
+  let query = supabase.from("vacaciones_historico").select("*").order("fecha_inicio", { ascending: true });
+  if (colaboradorId) query = query.eq("colaborador_id", colaboradorId);
+  const { data, error } = await query;
+  if (error) throw error;
+  return data;
+}
+
 export async function crearAjusteVacaciones(colaboradorId, dias, motivo, userId) {
   const { data, error } = await supabase
     .from("vacaciones_ajustes")

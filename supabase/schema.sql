@@ -198,6 +198,20 @@ create table if not exists public.suspensiones_igss (
   updated_at timestamptz not null default now()
 );
 
+-- Histórico de vacaciones ya gozadas antes de que RRHH empezara a aprobar
+-- solicitudes dentro del sistema. Es puramente informativo (para mostrarlo en
+-- el Recibo de vacaciones) y NO participa en el cálculo del saldo pendiente,
+-- que sigue siendo vacaciones_ajustes - solicitudes aprobadas.
+create table if not exists public.vacaciones_historico (
+  id uuid primary key default gen_random_uuid(),
+  colaborador_id uuid not null references public.profiles(id) on delete cascade,
+  fecha_inicio date not null,
+  fecha_fin date not null,
+  dias numeric(5,2) not null,
+  creado_por uuid references public.profiles(id),
+  created_at timestamptz not null default now()
+);
+
 -- Referencia histórica: cantidad de horas extra que ya traía capturada la
 -- planilla original de un mes (antes de existir el registro biométrico en el
 -- sistema). Sirve para cruzar/validar contra lo que calcula el biométrico.
@@ -431,6 +445,15 @@ alter table public.suspensiones_igss enable row level security;
 drop policy if exists suspensiones_igss_rrhh on public.suspensiones_igss;
 create policy suspensiones_igss_rrhh on public.suspensiones_igss
   for all to authenticated using (public.current_role() = 'rrhh') with check (public.current_role() = 'rrhh');
+
+-- histórico de vacaciones: cada quien ve el suyo; solo RRHH administra.
+alter table public.vacaciones_historico enable row level security;
+drop policy if exists vacaciones_historico_select on public.vacaciones_historico;
+create policy vacaciones_historico_select on public.vacaciones_historico
+  for select to authenticated using (colaborador_id = auth.uid() or public.current_role() = 'rrhh');
+drop policy if exists vacaciones_historico_write on public.vacaciones_historico;
+create policy vacaciones_historico_write on public.vacaciones_historico
+  for insert to authenticated with check (public.current_role() = 'rrhh');
 
 -- horas extra de planilla original: solo RRHH (dato de validación interna).
 alter table public.horas_extra_planilla_original enable row level security;
